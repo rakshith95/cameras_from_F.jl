@@ -1,13 +1,34 @@
-function noise_F_from_points(σ, P₁::Camera{T}, P₂::Camera{T}, r=20) where T<:AbstractFloat
+function noise_cameras( σ::T, Ps::Cameras{T}) where T<:AbstractFloat
+    θ = abs(rand(Distributions.Normal(0,σ)))
+    return Cameras{T}([ Camera{T}(reshape(projective_synchronization.angular_noise(vec(Ps[i]), θ) , 3, 4)) for i=1:length(Ps) ])
+end
+
+function noise_F_from_points(σ, P₁::Camera{T}, P₂::Camera{T}, resolution=(1280,720)) where T<:AbstractFloat
     # Think about how best  to do this
     X = Pts3D{Float64}([rand(3),rand(3),rand(3),rand(3),rand(3),rand(3),rand(3),rand(3)])
     X_homo = homogenize.(X)
-    x₁_homo = Pts2D_homo{Float64}([P₁*X_homo[i] + rand(Distributions.Normal(0, σ), 3) for i=1:length(X)])
-    x₂_homo = Pts2D_homo{Float64}([P₂*X_homo[i] + rand(Distributions.Normal(0, σ), 3) for i=1:length(X)])
-    
+    x₁_homo = Pts2D_homo{Float64}([P₁*X_homo[i] for i=1:length(X)]) #+ rand(Distributions.Normal(0, σ), 3) for i=1:length(X)])
+    x₂_homo = Pts2D_homo{Float64}([P₂*X_homo[i] for i=1:length(X)]) #+ rand(Distributions.Normal(0, σ), 3) for i=1:length(X)])
+    s₁ = resolution[1]/max(maximum(euclideanize.(x₁_homo))...    )
+    s₂ = resolution[2]/max(maximum(euclideanize.(x₂_homo))...    )
+    x₁_homo = Pts2D_homo{Float64}([s₁*P₁*X_homo[i] + rand(Distributions.Normal(0, σ), 3) for i=1:length(X)])
+    x₂_homo = Pts2D_homo{Float64}([s₂*P₂*X_homo[i] + rand(Distributions.Normal(0, σ), 3) for i=1:length(X)])
+
     F = F_8ptNorm(x₁_homo, x₂_homo)
     return F
 end
+
+# noise_F_from_points(1, Camera{Float64}(rand(3,4)), Camera{Float64}(rand(3,4)) );
+
+function noise_F_gaussian(σ, P₁::Camera{T}, P₂::Camera{T}) where T<:AbstractFloat
+    F = F_from_cams(P₁, P₂)
+    F_noised = F + rand(Distributions.Normal(0,σ), 3, 3) 
+    # rank-2 approximation
+    F_noisy_svd = svd(F_noised)
+    F_noised = FundMat{T}(F_noisy_svd.U*diagm([F_noisy_svd.S[1:2];0.0])*F_noisy_svd.Vt)
+    return F_noised
+end
+    
 
 function  noise_F_angular(σ::T, P₁::Camera{T}, P₂::Camera{T}) where T<:AbstractFloat
     F = F_from_cams(P₁, P₂)
@@ -61,28 +82,30 @@ function compute_multiviewF_from_cams!(σ, F_multiview::AbstractSparseMatrix, ca
                 F_multiview[i,j] = noise_F_angular(σ, cams[j], cams[i])
             elseif occursin("points", noise_type)
                 F_multiview[i,j] = noise_F_from_points(σ, cams[j], cams[i])
-                # F = F_from_cams(cams[i], cams[j])
-                # display(F/norm(F))
-                # display(F_multiview[i,j]/norm(F_multiview[i,j]))
-                # println("\n\n")
+            elseif occursin("gaussian", noise_type)
+                F_multiview[i,j] = noise_F_gaussian(σ, cams[j], cams[i])
             end
             F_multiview[j,i] = F_multiview[i,j]'
         end
     end
 end
 
-
 function create_synthetic_environment(σ, methods; noise_type="angular", error=projective_synchronization.angular_distance, kwargs...)
     normalize_cameras = get(kwargs, :normalize, true)
     n = get(kwargs, :num_cams, 25)
     ρ = get(kwargs, :holes_density, 0.4)
     Ρ = get(kwargs, :outliers_density, 0.0)
+    init = get(kwargs, :initialize, false)
+    camera_noise = get(kwargs, :camera_noise, 0.0)
+    missing_initial = get(kwargs, :missing_initial, 0.0)
+    init_method = get(kwargs, :init_method, "gpsfm")
 
     gt_cameras = Cameras{Float64}(repeat([Camera(zeros(3,4))], n))
     create_cameras!(gt_cameras, normalize_cameras)
     F_multiview = SparseMatrixCSC{FundMat{Float64}, Int64}(repeat([FundMat(zeros(3,3))],n,n)) # Relative projectivities
     compute_multiviewF_from_cams!(σ, F_multiview, gt_cameras, noise_type=noise_type)
-    
+        
+    errs = zeros(n, 1)
     A = missing
     while true
         A = sprand(n,n, ρ)
@@ -105,19 +128,47 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
         F_out = F_out_svd.U*diagm([F_out_svd.S[1:end-1];0])*F_out_svd.Vt
         F_multiview[ind] = FundMat{Float64}(F_out)
     end
-
-    errs = zeros(n, 1)
-    for method in methods
-        Ps = recover_cameras_iterative(F_multiview; recovery_method=method, kwargs...);
-        errs = hcat(errs, compute_error(gt_cameras, Ps, error))
+    if init
+        if occursin("gt", lowercase(init_method)) || occursin("ground truth", lowercase(init_method))
+            P_init = noise_cameras(camera_noise, gt_cameras)
+        elseif occursin("gpsfm", lowercase(init_method))
+            F_unwrap = unwrap(F_multiview);
+            recovered_cameras_gpsfm = Cameras{Float64}(MATLAB.mxcall(:runProjectiveSim, 1, F_unwrap, "gpsfm"));
+            P_init = recovered_cameras_gpsfm
+            if "gpsfm" in lowercase.(methods)
+                errs =  hcat(errs, compute_error(gt_cameras, recovered_cameras_gpsfm, error));
+            end
+        end
+        init_missing = StatsBase.sample(collect(1:length(P_init)), Int(round(missing_initial*length(P_init))) )
+        for i=1:length(P_init)
+            if i in init_missing
+                P_init[i] = Camera_canonical
+            end
+        end
+    else
+        P_init = nothing
     end
-    
+    # P_st = recover_camera_SpanningTree(F_multiview)
+    recovered_cameras = nothing
+    for method in methods
+        if occursin("gpsfm", lowercase(method))
+            continue
+        else
+            recovered_cameras = recover_cameras_iterative(F_multiview; P₀=P_init, recovery_method=method, kwargs...);
+            errs = hcat(errs, compute_error(gt_cameras, recovered_cameras, error))
+        end
+    end
     return errs[:,2:end]
 end
 
-
-# test_mthds = ["skew_symmetric","skew_symmetric_vector"]
-# Err = create_synthetic_environment(0.01, test_mthds; holes_density=0.0, num_cams=20, noise_type="angular", update="random", set_anchor="centrality", max_iterations=2000)
-
-# size(Err)
+#p 256 hartley for 2 cameras from F.
+#Initialization with Spanning Tree, kind of 
+# test_mthds = ["gpsfm", "skew_symmetric_vectorization"]
+# Err = create_synthetic_environment(0.0, test_mthds;update_init="anchor-only", initialize=true, init_method="gpsfm", missing_initial=0.1, camera_noise=deg2rad(0), holes_density=0.0, num_cams=20, noise_type="angular", update="random", set_anchor="fixed", max_iterations=1000);
 # rad2deg.(mean.(eachcol(Err)))
+
+
+
+
+
+

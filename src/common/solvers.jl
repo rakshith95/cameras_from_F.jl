@@ -1,3 +1,9 @@
+function get_NullSpace_ev(A::SMatrix{M,N,T}) where {M, N, T<:AbstractFloat}
+    D = Symmetric(A'*A)
+    (λ, ev) = eigen(D, 1:1)
+    return projective_synchronization.unit_normalize(vec(ev))
+end
+
 function make_skew_symmetric(x::SVector{3,T}) where T
    return SMatrix{3,3,T}([[0, x[3], -x[2]] [-x[3], 0, x[1]] [x[2], -x[1], 0 ]]) 
 end
@@ -163,7 +169,10 @@ function recover_camera_SkewSymm(Ps::Cameras{T}, Fs::FundMats{T};) where T<:Abst
     end
 
     D_svd = svd(D, full=true)
+    # display(D*D_svd.V[:, end])
     Pⱼ = Camera{T}(reshape(D_svd.V[:, end], 3, 4)) #  Last column of V is solution for null space problem
+    # nullV = get_NullSpace_ev(SMatrix{size(D)...,T}(D))
+    # Pⱼ = Camera{T}(reshape(nullV, 3,4))
     return Pⱼ
 end
 
@@ -252,7 +261,7 @@ end
 
 function recover_camera_sphere(Ps::Cameras{T}, Fs::FundMats{T}) where T<:AbstractFloat 
     # 3.2.3 in overleaf
-    initial_guess = 2*Vector{T}(vec(recover_camera_SkewSymm(Ps, Fs)))
+    # initial_guess = 2*Vector{T}(vec(recover_camera_SkewSymm(Ps, Fs)))
     num_cams = length(Ps)
     L = zeros(12, num_cams)
     for i=1:num_cams
@@ -268,34 +277,25 @@ function recover_camera_sphere(Ps::Cameras{T}, Fs::FundMats{T}) where T<:Abstrac
         end
     end
 
-    c = projective_synchronization.spherical_mean(L, c₀=initial_guess)
+    c = projective_synchronization.spherical_mean(L)
     return Camera{T}(reshape(c, 3,4))
 end
 
-# P1 = Camera{Float64}(rand(3,4));
-# P2 = Camera{Float64}(rand(3,4));
-# P3 = Camera{Float64}(rand(3,4));
-# P4 = Camera{Float64}(rand(3,4));
- 
-# θ = 0.01
-# F_12 = F_from_cams(P2, P1);
-# F_12 = FundMat{Float64}(reshape(projective_synchronization.angular_noise(vec(F_12), θ), 3, 3))
-# F_13 = F_from_cams(P3, P1);
-# F_13 = FundMat{Float64}(reshape(projective_synchronization.angular_noise(vec(F_13), θ), 3, 3))
-# F_14 = F_from_cams(P4, P1);
-# F_14 = FundMat{Float64}(reshape(projective_synchronization.angular_noise(vec(F_14), θ), 3, 3))
- 
-# Ps = Cameras{Float64}([P2, P3, P4]);
-# Fs = FundMats{Float64}([F_12, F_13, F_14]);
-  
-# P1_rec = recover_camera_SkewSymm(Ps, Fs);
-# P2'*F_21*P1_rec
-# P1_rec = recover_camera_PseudoInverse_withScales(Ps, Fs);
-# P1_rec = recover_camera_PseudoInverse(Ps, Fs);
-# P1_rec_sph = recover_camera_sphere(Ps, Fs);
-# P1_rec_sph/P1_rec_sph[end,end]
-# P1_rec/P1_rec[end,end]
-# P1/P1[end,end]
+function recover_camera_averaging(Ps::Cameras{T}, Fs::FundMats{T}; recover_camera=recover_camera_SkewSymm, average_fn=projective_synchronization.spherical_mean) where T<:AbstractFloat
+    nc2 = collect(Combinatorics.combinations(1:length(Ps), 2))
+    M = zeros(12, length(nc2))
+    for (i,pair) in enumerate(nc2)
+        M[:,i] = vec(recover_camera(Ps[pair], Fs[pair]) )
+    end
+    for j=2:size(M,2)
+        if dot(view(M,:,1),view(M,:,j)) < 0
+            M[:,j] = -M[:,j]
+        end
+    end
+    c = average_fn(M)
+    return Camera{T}(reshape(c,3,4))
+end
 
-# P1_rec_v = recover_camera_SkewSymm_vectorization(Ps, Fs);
-# P1_rec_v/P1_rec_v[end,end]
+
+# function get_cam(H, P, Q)
+    # D = kron(H', SMatrix{3,3,Float64}(I))    

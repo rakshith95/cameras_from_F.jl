@@ -39,3 +39,25 @@ end
 function euclideanize(Pt_homo::Pt3D_homo{T})::Pt3D{T} where T
     return Pt3D{T}( (Pt_homo/Pt_homo[end])[1:end-1]  )
 end
+
+function unwrap!(F_unwrapped::AbstractMatrix{T}, F_multiview::SparseMatrixCSC{FundMat{T}, S}) where {T<:AbstractFloat, S<:Integer}
+    # Can mb be sped up by only iterating half and traposing for other half
+    n = size(F_multiview,1)
+    ze = zeros(T, 3, 3)
+
+    for i=1:3:(n*3)-3+1
+        for j=1:3:(n*3)-3+1
+            if !iszero(F_multiview[div(i,3)+1,div(j,3)+1])
+                F_unwrapped[i:i+3-1, j:j+3-1] = F_multiview[div(i,3)+1,div(j,3)+1]
+            else
+                @views F_unwrapped[i:i+3-1, j:j+3-1] = ze
+            end
+        end
+    end
+end
+
+function unwrap(F_multiview::SparseMatrixCSC{FundMat{T}, S}) where {T<:AbstractFloat, S<:Integer}
+    F_unwrapped = zeros(T, size(F_multiview,1)*3, size(F_multiview,1)*3)
+    unwrap!(F_unwrapped, F_multiview)
+    return F_unwrapped
+end
