@@ -15,20 +15,25 @@ function sensitivity(synthetic_env_creator, param_type::String, param_range::Vec
     end
 end
 
-#=
-Test cases:
-1. All neighbors initially vs one at a time
-2. update all in one iteration vs randomly update nodes
-3. initialize Random vs canonical 
-=#
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/GPSFM')"
 
-# test_mthds = [ "gpsfm", "skew_symmetric_vectorized"]
-# E_noise_F = sensitivity(create_synthetic_environment, "noise", collect(0.0:0.01:0.05), test_mthds, projective_synchronization.angular_distance; update_init="all", initialize=true, init_method="gpsfm", missing_initial=0.1, num_trials=50, holes_density=0.0, num_cams=20, noise_type="angular", update="random", set_anchor="fixed", max_iterations=1500);
-# # 
+# test_mthds =  ["gpsfm", "skew_symmetric_vectorized", "skew_symmetric-l1"]
+# E_noise_F = sensitivity(create_synthetic_environment, "noise", collect(0.0:0.01:0.05), test_mthds, projective_synchronization.angular_distance; update_init="all", initialize=true, init_method="gpsfm", num_trials=50, holes_density=0.2, num_cams=20, noise_type="angular", update="random-all", set_anchor="fixed", max_iterations=200);
+
+# test_mthds = ["skew_symmetric_vectorized"]
 # Errs_matrix = stack(stack.(E_noise_F)');
 # Errs_matrix = rad2deg.(Errs_matrix);
 # Errs_matrix = dropdims(Errs_matrix, dims = tuple(findall(size(Errs_matrix) .== 1)...));;
 # file = MAT.matopen("Noise_Fs.mat", "w")
 # write(file, "E", Errs_matrix)   
 # close(file)
+
+# GPSFM + Synchronization as a competitor 
+# Test with gpsfm datasets  
+# Get cameras covered by triplets with similar method to what GPSFM does.
+# Weighted outliers
+# Check L1 loss instead of least squares error for F estimation. 
+
+# 1D SFM 
+
+#ALL-RANDOM INSTEAD OF RANDOM UPDATE WORKS BETTER

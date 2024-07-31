@@ -1,7 +1,12 @@
-function get_NullSpace_ev(A::SMatrix{M,N,T}) where {M, N, T<:AbstractFloat}
+function get_NullSpace_ev(A::AbstractMatrix{T}) where {T<:AbstractFloat}
     D = Symmetric(A'*A)
     (λ, ev) = eigen(D, 1:1)
     return projective_synchronization.unit_normalize(vec(ev))
+end
+
+function get_NullSpace_svd(A::AbstractMatrix{T};full=false) where {T<:AbstractFloat}
+    A_svd = svd(A, full=full)
+    return A_svd.V[:, end] #  Last column of V is solution for null space problem
 end
 
 function make_skew_symmetric(x::SVector{3,T}) where T
@@ -147,7 +152,7 @@ function F_8ptNorm(x_homo::Pts2D_homo{T}, x′_homo::Pts2D_homo{T}) where T
     return F
 end
 
-function recover_camera_SkewSymm(Ps::Cameras{T}, Fs::FundMats{T};) where T<:AbstractFloat
+function recover_camera_SkewSymm(Ps::Cameras{T}, Fs::FundMats{T}; l1=false) where T<:AbstractFloat
     # Given Pᵢ, and Fᵢⱼ , find Pⱼ
     # PᵢᵀFᵢⱼPⱼ is skew symmetric
     num_cams = length(Ps)
@@ -168,12 +173,14 @@ function recover_camera_SkewSymm(Ps::Cameras{T}, Fs::FundMats{T};) where T<:Abst
         D[k*10+10,:] = [z; z; A[4,1:3]; A[3,1:3]]
     end
 
-    D_svd = svd(D, full=true)
-    # display(D*D_svd.V[:, end])
-    Pⱼ = Camera{T}(reshape(D_svd.V[:, end], 3, 4)) #  Last column of V is solution for null space problem
-    # nullV = get_NullSpace_ev(SMatrix{size(D)...,T}(D))
-    # Pⱼ = Camera{T}(reshape(nullV, 3,4))
-    return Pⱼ
+    # D_svd = svd(D, full=true)
+    # Pⱼ = Camera{T}(reshape(D_svd.V[:, end], 3, 4)) #  Last column of V is solution for null space problem
+    if !l1
+        return Camera{T}(reshape(get_NullSpace_svd(D), 3, 4))
+    else
+        return Camera{T}(reshape(l1_nullspace_irls(D, 10, δ=1e-3), 3, 4))
+    end
+
 end
 
 function recover_camera_SkewSymm_vectorization(Ps::Cameras{T}, Fs::FundMats{T}) where T<:AbstractFloat
@@ -187,9 +194,7 @@ function recover_camera_SkewSymm_vectorization(Ps::Cameras{T}, Fs::FundMats{T}) 
     for i=1:num_cams
         D[(i-1)*16+1:(i-1)*16+16, :] = ( kron( (Ps[i]'*Fs[i]') , I₄)*K₃₄) + (kron( I₄, Ps[i]'*Fs[i]' ))
     end
-    D_svd = svd(D)
-    Pⱼ = Camera{T}(reshape(D_svd.V[:, end], 3, 4)) #  Last column of V is solution for null space problem
-    return Pⱼ
+    return Camera{T}(reshape(get_NullSpace_svd(D), 3, 4))
 end
 
 function recover_camera_PseudoInverse_withScales(Ps::Cameras{T}, Fs::FundMats{T}) where T<:AbstractFloat
@@ -296,6 +301,6 @@ function recover_camera_averaging(Ps::Cameras{T}, Fs::FundMats{T}; recover_camer
     return Camera{T}(reshape(c,3,4))
 end
 
-
-# function get_cam(H, P, Q)
-    # D = kron(H', SMatrix{3,3,Float64}(I))    
+# D = w1*(A'*A) + w2*(B'*B); OR
+# D = [√w₁A ; √w₂B]
+# z = get_NullSpace_svd(D);

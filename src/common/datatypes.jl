@@ -40,15 +40,38 @@ function euclideanize(Pt_homo::Pt3D_homo{T})::Pt3D{T} where T
     return Pt3D{T}( (Pt_homo/Pt_homo[end])[1:end-1]  )
 end
 
+function wrap!(F::SparseMatrixCSC{FundMat{T}, S}, F_unwrapped::AbstractMatrix{T}) where {T<:AbstractFloat, S<:Integer}
+    n = size(F,1)
+    for i=1:n
+        for j=i+1:n
+            # display(F_unwrapped[(i-1)*3+1:i*3, (j-1)*3+1:j*3])
+            if iszero(view(F_unwrapped, (i-1)*3+1:i*3, (j-1)*3+1:j*3))
+                continue
+            end
+            F[i,j] = FundMat{T}(@views F_unwrapped[(i-1)*3+1:i*3, (j-1)*3+1:j*3])
+            F[j,i] = FundMat{T}(@views F[i,j]')
+        end
+    end
+end
+
+function wrap(F_unwrapped::AbstractMatrix{T}) where T<:AbstractFloat
+    n = div(size(F_unwrapped,1),3)
+    F = SparseMatrixCSC{FundMat{T}, Int64}(spzeros(FundMat{T},n,n))
+    wrap!(F, F_unwrapped)
+    return F
+end
+
 function unwrap!(F_unwrapped::AbstractMatrix{T}, F_multiview::SparseMatrixCSC{FundMat{T}, S}) where {T<:AbstractFloat, S<:Integer}
     # Can mb be sped up by only iterating half and traposing for other half
     n = size(F_multiview,1)
     ze = zeros(T, 3, 3)
 
     for i=1:3:(n*3)-3+1
-        for j=1:3:(n*3)-3+1
+        # for j=1:3:(n*3)-3+1
+        for j=i+3:3:(n*3)-3+1
             if !iszero(F_multiview[div(i,3)+1,div(j,3)+1])
                 F_unwrapped[i:i+3-1, j:j+3-1] = F_multiview[div(i,3)+1,div(j,3)+1]
+                F_unwrapped[j:j+3-1, i:i+3-1] = F_unwrapped[i:i+3-1, j:j+3-1]'
             else
                 @views F_unwrapped[i:i+3-1, j:j+3-1] = ze
             end

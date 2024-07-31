@@ -1,15 +1,19 @@
-function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; P₀=nothing, weights=nothing, kwargs...) 
-    method = get(kwargs, :recovery_method, "skew_symmetric")
+function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothing, weights=nothing, kwargs...) 
+    method = get(kwargs, :method, "skew_symmetric")
     max_it = get(kwargs, :max_iterations, 1000)
     max_updates = get(kwargs, :max_updates, max_it)
     min_updates = get(kwargs, :min_updates, 10)
     δ = get(kwargs, :δ, 1e-10)
-    initial_updated = get(kwargs, :update_init, "only-anchor")
+    initial_updated = get(kwargs, :update_init, "all")
     update_method = get(kwargs, :update, "all-random")
     set_anchor = get(kwargs, :anchor, "fixed")
 
     if occursin("skew_symm", lowercase(method))
-        avg = recover_camera_SkewSymm
+        if occursin("l1", lowercase(method))
+            avg(Ps,Fs) = recover_camera_SkewSymm(Ps,Fs; l1=true)
+        else
+            avg = recover_camera_SkewSymm
+        end
     elseif occursin("vectorized", lowercase(method))
         avg = recover_camera_SkewSymm_vectorization
     elseif occursin("combinations", lowercase(method))
@@ -29,39 +33,31 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; P₀=nothi
     updated = zeros(Int, num_cams)
 
 
-    if isnothing(P₀)
+    if isnothing(X₀)
         if num_cams < 40
             Ps = SizedVector{num_cams, Camera{Float64}}(repeat([Camera_canonical], num_cams))
-            # Ps = Vector{Camera{Float64}}(repeat([rand(3,4)], num_cams))
-            # for i=1:num_cams
-                # Ps[i] = Camera{Float64}(rand(3,4))
-            # end
         else
             Ps = Vector{Camera{Float64}}(repeat([Camera_canonical], num_cams))
         end
     else
-        Ps = copy(P₀)
+        Ps = copy(X₀)
+    end
+
+    if isnothing(weights)
+        weights = ones(size(F_multiview))
     end
 
     if occursin("all", lowercase(initial_updated))
         updated .= 1
-        # if !isnothineg(P₀)
-            # for i=1:enum_cams
-                # if Pes[i] == Camera_canonical
-                    # eupdated[i] = 0 
-                # ende
-            # ende
-        # ende
+        if !isnothing(X₀)
+            for i=1:num_cams
+                if Ps[i] == Camera_canonical
+                    updated[i] = 0 
+                end
+            end
+        end
     end
-    C = nothing
-    try
-        C = eigenvector_centrality(G)
-    catch
-        C = degree_centrality(G)
-    end
-    if median(C) < 1e-5
-        C = degree_centrality(G, normalize=true)
-    end
+    C = degree_centrality(G)
 
     if occursin("nothing", set_anchor) || occursin("none", set_anchor)
         anchor = rand(1:n)
@@ -69,13 +65,7 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; P₀=nothi
     else
         if occursin("centrality", set_anchor)
             # Set anchor node according to centrality
-            if median(C) < 1e-6
                 _,anchor = findmax(C)
-            else
-                N = neighbors(G,findmax(C)[2])
-                N_degs = C[N]        
-                anchor = N[findmin(N_degs)[2]]
-            end
         elseif occursin("fixed", set_anchor)
             anchor = 1
         elseif occursin("rand", set_anchor)
@@ -84,7 +74,7 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; P₀=nothi
         updated[anchor] = max_updates
         steady[anchor] = true
     end
-    
+
     nodes = collect(1:num_cams)
     
     if occursin("start", lowercase(update_method))
