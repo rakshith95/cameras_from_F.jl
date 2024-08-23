@@ -1,31 +1,47 @@
 
+# function frobenius_norm(F1::FundMat{T}, F2::FundMat{T}) where T<:AbstractFloat
+    # if iszero(F1) && iszero(F2)
+        # return 0.0
+    # elseif (!iszero(F1) && iszero(F2)) || (iszero(F1) && !iszero(F2))
+        # return Inf
+    # else
+        # return norm( F1/norm(F1) - F2/norm(F2) )
+    # end
+# end
+
 function compute_weights(Z::AbstractMatrix, Ẑ::AbstractMatrix;error_measure=projective_synchronization.angular_distance, weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy, h=projective_synchronization.h_robust)
     E_UT = error_measure.(UpperTriangular(Z),UpperTriangular(Ẑ))
     E_LT = error_measure.(LowerTriangular(Z),LowerTriangular(Ẑ))
-    E = min.(E_UT, E_LT')
+    # E = min.(E_UT, E_LT')
+    E = (E_UT + E_LT')/2
     E = E + E'
     s = StatsBase.mad(E[.!isinf.(E)])
     if iszero(s)
-        s = std(E[.!isinf.(E)])
+        s = 1e-3
+        # s = std(E[.!isinf.(E)])
     end
     if iszero(s)
         return false
     end
     wts = weight_function.(E/(h*c*s)) 
+    return wts
 end
 
-function outer_irls(iterative_fn, input_var::SparseMatrixCSC, X₀::AbstractVector{T}, iterative_method::String, error_fn; compute_Z_fn = (Z,X) -> compute_multiviewF_from_cams!(0.0,Z,X),  weights=nothing, inner_method_max_it=10, weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy, h=projective_synchronization.h_robust, error_measure=projective_synchronization.angular_distance, max_iterations=100, δ_irls=1e-6, kwargs...) where T
-    max_iter_init = get(kwargs, :max_iter_int, 100)
+function outer_irls(iterative_fn, input_var::SparseMatrixCSC, X₀::AbstractVector{T}, iterative_method::String, error_fn; compute_Z_fn = (Z,X) -> compute_multiviewF_from_cams!(0.0,Z,X),  weights=nothing, inner_method_max_it=10, weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy, h=projective_synchronization.h_robust, error_measure=projective_synchronization.angular_distance, max_iterations=50, δ_irls=1e-6, kwargs...) where T
+    max_iter_init = get(kwargs, :max_iter_int, 50)
     exit_loop = false
     iter = 0 
     n = size(input_var, 1)
+    Ẑ = SparseMatrixCSC{eltype(input_var), Integer}(repeat([zero(eltype(input_var))], n,n))
     
     if isnothing(weights)
-        wts = ones(n,n)
+        compute_Z_fn(Ẑ, X₀)
+        wts = compute_weights(input_var, Ẑ, error_measure=error_measure, weight_function=weight_function, c=c, h=h)
+        # display(wts)
+        # wts = ones(n,n)
     end
 
     X_prev = copy(X₀)
-    Ẑ = SparseMatrixCSC{eltype(input_var), Integer}(repeat([zero(eltype(input_var))], n,n))
 
     while !exit_loop && iter <= max_iterations
         if iszero(iter)
@@ -41,7 +57,7 @@ function outer_irls(iterative_fn, input_var::SparseMatrixCSC, X₀::AbstractVect
         end
         iter += 1
 
-        if mean(error_fn(X, X_prev, error_measure)) <= δ_irls
+        if rad2deg(mean(error_fn(X, X_prev, error_measure))) <= δ_irls
             X_prev = X
             exit_loop = true
         end
@@ -52,32 +68,28 @@ function outer_irls(iterative_fn, input_var::SparseMatrixCSC, X₀::AbstractVect
 end
 
 
-function l1_nullspace_irls(D::AbstractMatrix{T}, dimension::Integer;max_iter=100, convergence_δ=1e-6, δ=1e-4) where T<:AbstractFloat
-    wts = ones(size(D,1))
+function l1_nullspace_irls(Ps::Cameras{T}, Fs::FundMats{T}, wts = ones(length(Ps)); recover_camera=recover_camera_subspace, max_iter=50, convergence_δ=1e-4, δ=1e-3) where T<:AbstractFloat
     converge = false
     iter = 0
+    Ms = Vector{SMatrix{16,12,Float64}}(undef,length(Ps))
 
-    x = get_NullSpace_svd(D)
+    for i=1:length(Ps)
+        Ms[i] = ( kron( (Ps[i]'*Fs[i]') , I₄)*K₃₄) + (kron( I₄, Ps[i]'*Fs[i]' ))
+    end
+
+    x = vec(recover_camera(Ps,Fs, wts))
     while !converge && iter < max_iter
-        if norm(D*x, 1) < convergence_δ
-            break
-        end
-        iter += 1
         x_prev = copy(x)
-        for i=1:div(size(D,1), dimension)
-            rᵢ = norm(D[(i-1)*dimension+1:i*dimension,:]*x_prev, 1)
-            if iter>0
-                wtsᵢ = 1/max(δ,rᵢ)
-            else
-                wtsᵢ = view(wts,i)
-            end
-            D[(i-1)*dimension+1:i*dimension,:] = sqrt(wtsᵢ)*D[(i-1)*dimension+1:i*dimension,:]
+        iter += 1
+        for i=1:length(Ps)
+            # rᵢ = @views norm(obj_i(x, Ms[i]))
+            wts[i] = @views 1/max(δ,norm(obj_i(x, Ms[i])))
         end
-        x = get_NullSpace_svd(D)
-        if norm(x-x_prev, 1) < convergence_δ
+        x = vec(recover_camera(Ps,Fs, wts))
+        if norm(x-x_prev) < convergence_δ
             converge = true
         end
     end
-
+    # println(wts)
     return x
 end

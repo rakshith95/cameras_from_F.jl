@@ -1,4 +1,4 @@
-function sensitivity(synthetic_env_creator, param_type::String, param_range::Vector{T}, test_methods::Vector{String}, error; num_trials=1e3, kwargs...) where T<:AbstractFloat
+function sensitivity(synthetic_env_creator, param_type::String, param_range::Vector{T}, test_methods::Vector{String}, error; σ_fixed=0.0, num_trials=1e3, kwargs...) where T<:AbstractFloat
     E = Vector{Vector{Vector{Float64}}}(undef, length(param_range))
     if occursin("noise", param_type)
         i=1
@@ -12,15 +12,29 @@ function sensitivity(synthetic_env_creator, param_type::String, param_range::Vec
             i += 1
         end
         return E
+    elseif occursin("outlier", param_type)
+        i=1
+        for Ρ=tqdm(param_range)
+            Eᵢ = Vector{Vector{Float64}}(undef, num_trials)
+            for j=tqdm(1:num_trials)
+                Eⱼ = synthetic_env_creator(σ_fixed, test_methods; outliers_density=Ρ, kwargs...)
+                Eᵢ[j] = mean.(eachcol(Eⱼ))
+            end
+            E[i] = Eᵢ
+            i += 1
+        end
+        return E    
     end
 end
-
+# MATLAB.mat"addpath('/home/rakshith/PoliMi/Recovering Cameras/finite-solvability')"
+# MATLAB.mat"addpath('/home/rakshith/PoliMi/Recovering Cameras/finite-solvability/Finite_solvability')"
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/GPSFM')"
 
-# test_mthds =  ["gpsfm", "skew_symmetric_vectorized", "skew_symmetric-l1"]
-# E_noise_F = sensitivity(create_synthetic_environment, "noise", collect(0.0:0.01:0.05), test_mthds, projective_synchronization.angular_distance; update_init="all", initialize=true, init_method="gpsfm", num_trials=50, holes_density=0.2, num_cams=20, noise_type="angular", update="random-all", set_anchor="fixed", max_iterations=200);
+# test_mthds = ["gpsfm", "skew_symmetric", "skew_symmetric_l1", "skew_symmetric-irls"]
+# test_mthds = ["gpsfm", "skew_symmetric_vectorized",  "gradient_descent"]
+# 
+# E_noise_F = sensitivity(create_synthetic_environment, "noise", collect(0.0:0.01:0.05), test_mthds, projective_synchronization.angular_distance; update_init="all", initialize=true, init_method="gpsfm", num_trials=100, holes_density=0.0, num_cams=25, noise_type="angular", update="random-all", set_anchor="fixed", max_iterations=200);
 
-# test_mthds = ["skew_symmetric_vectorized"]
 # Errs_matrix = stack(stack.(E_noise_F)');
 # Errs_matrix = rad2deg.(Errs_matrix);
 # Errs_matrix = dropdims(Errs_matrix, dims = tuple(findall(size(Errs_matrix) .== 1)...));;

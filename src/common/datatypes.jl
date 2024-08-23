@@ -24,6 +24,10 @@ const FundMat{T <: AbstractFloat}      = SMatrix{3,3,T}
 
 const FundMats{T <: AbstractFloat}     = Vector{FundMat{T}}
 
+const I₄ = SMatrix{4,4,Float64}(I)
+
+const K₃₄ = get_commutation_matrix(3,4)
+
 function homogenize(Pt::Pt2D{T})::Pt2D_homo{T} where T
     return Pt2D_homo{T}([Pt; 1])
 end
@@ -62,18 +66,12 @@ function wrap(F_unwrapped::AbstractMatrix{T}) where T<:AbstractFloat
 end
 
 function unwrap!(F_unwrapped::AbstractMatrix{T}, F_multiview::SparseMatrixCSC{FundMat{T}, S}) where {T<:AbstractFloat, S<:Integer}
-    # Can mb be sped up by only iterating half and traposing for other half
     n = size(F_multiview,1)
-    ze = zeros(T, 3, 3)
-
     for i=1:3:(n*3)-3+1
-        # for j=1:3:(n*3)-3+1
         for j=i+3:3:(n*3)-3+1
             if !iszero(F_multiview[div(i,3)+1,div(j,3)+1])
                 F_unwrapped[i:i+3-1, j:j+3-1] = F_multiview[div(i,3)+1,div(j,3)+1]
                 F_unwrapped[j:j+3-1, i:i+3-1] = F_unwrapped[i:i+3-1, j:j+3-1]'
-            else
-                @views F_unwrapped[i:i+3-1, j:j+3-1] = ze
             end
         end
     end
