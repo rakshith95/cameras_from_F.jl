@@ -41,29 +41,11 @@ function get_triplet_cover(A::AbstractSparseMatrix)
     cc = Graphs.connected_components(Graph(A))
     largest_cc = cc[findmax(length.(cc))[2]]
     return triplets[:, largest_cc]
-   # covered = []
-    # for j=1:size(triplets,2)
-        # if j in covered
-            # continue
-        # end
-        # for k=j+1:size(triplets,2)
-            # t1_pairs = Combinatorics.combinations(view(triplets,:,j))
-            # t2_pairs = Combinatorics.combinations(view(triplets,:,k))
-            # if any(t1_pairs .∈ Ref(t2_pairs))
-                # covered = [covered;j;k]
-                # break
-            # end
-        # end
-    # end
-    # println(setdiff(covered, collect(1:size(triplets,2))))
-    # return triplets[:,covered]
-
-
 end
 
 function noise_cameras( σ::T, Ps::Cameras{T}) where T<:AbstractFloat
     θ = abs(rand(Distributions.Normal(0,σ)))
-    return Cameras{T}([ Camera{T}(reshape(projective_synchronization.angular_noise(vec(Ps[i]), θ) , 3, 4)) for i=1:length(Ps) ])
+    return Cameras{T}([ Camera{T}(reshape(projective_synchronization.rotate_vector(vec(Ps[i]), θ) , 3, 4)) for i=1:length(Ps) ])
 end
 
 function noise_F_from_points(σ, P₁::Camera{T}, P₂::Camera{T}, resolution=(1280,720)) where T<:AbstractFloat
@@ -96,7 +78,7 @@ end
 function  noise_F_angular(σ::T, P₁::Camera{T}, P₂::Camera{T}) where T<:AbstractFloat
     F = F_from_cams(P₁, P₂)
     θ = abs(rand(Distributions.Normal(0,σ)))
-    F_noisy = FundMat{T}(reshape(projective_synchronization.angular_noise(vec(F), θ), 3, 3))
+    F_noisy = FundMat{T}(reshape(projective_synchronization.rotate_vector(vec(F), θ), 3, 3))
     #Rank 2 approximation
     F_noisy_svd = svd(F_noisy)
     F_noisy = FundMat{T}(F_noisy_svd.U*diagm([F_noisy_svd.S[1:2];0.0])*F_noisy_svd.Vt)
@@ -214,12 +196,11 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
         A′ = copy(A)
         UT_outliers = StatsBase.sample( findall(triu(A,1).!=0), num_outliers, replace=false)
         if length(UT_outliers) == 0
-            continue
+            break
         end
         # println(UT_outliers)
         A′[UT_outliers] .= 0
         A′[reverse.(UT_outliers)] .= 0.0
-        # display(A′[UT_outliers])
         C = rand(4,n);
         t2 = get_triplet_cover(A′)
         nonTriplet_cams2 = setdiff(  collect(1:n), unique(t2))
@@ -251,10 +232,6 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
             F_multiview_gpsfm = F_multiview[1:end .∉ Ref(nonTriplet_cams), 1:end .∉ Ref(nonTriplet_cams)]
             F_unwrap = unwrap(F_multiview_gpsfm);
 
-            # file = MAT.matopen("F_test.mat", "w")
-            # write(file, "F", F_unwrap)
-            # savegraph("problem_graph.lgz", G)
-            # close(file)
 
             recovered_cameras_gpsfm = Cameras{Float64}(MATLAB.mxcall(:runProjectiveSim, 1, F_unwrap, "gpsfm"));
             
@@ -281,6 +258,7 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
         P_init = nothing
     end
     recovered_cameras = nothing
+    Wts = nothing
     for method in methods
         if occursin("gpsfm", lowercase(method)) 
             if init && occursin("gpsfm", lowercase(init_method)) 
@@ -292,31 +270,75 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
             end
         else
             if occursin("irls", method)
-                recovered_cameras, Wts = outer_irls(recover_cameras_iterative, F_multiview, P_init, method, compute_error,  inner_method_max_it=10, weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy, max_iterations=50, δ_irls=1.0, update_init="all", update="random-all",  set_anchor="fixed");
-            else
+                recovered_cameras, Wts = outer_irls(recover_cameras_iterative, F_multiview, P_init, method, compute_error, max_iter_init=50, error_measure=projective_synchronization.angular_distance, inner_method_max_it=5, weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy, max_iterations=50, δ_irls=1.0, update_init="all", update="order-weights-update-all",  set_anchor="fixed");
+        else
                 recovered_cameras = recover_cameras_iterative(F_multiview; X₀=P_init, method=method, gt=gt_cameras, kwargs...);
             end
             errs = hcat(errs, compute_error(gt_cameras, recovered_cameras, error))
         end
     end
     return errs[:,2:end]
+    # return UT_outliers, gt_cameras, P_init, F_multiview, errs[:,2:end]
 end
 
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Recovering Cameras/finite-solvability')"
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Recovering Cameras/finite-solvability/Finite_solvability')"
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/GPSFM')"
 
-# test_mthds = ["gpsfm", "skew_symmetric", "skew_symmetric_l1", "skew_symmetric-irls"]
-# test_mthds = ["gpsfm", "skew_symmetric_vectorized",  "gradient_descent"]
-
-# test_mthds = ["gpsfm", "subspace", "subspace_l1", "subspace-irls", "subspace_l1-irls" ] 
-# Err = create_synthetic_environment(0.03, test_mthds; outliers_density=0.1, holes_density=0.0, update_init="all", initialize=true, init_method="gpsfm",  num_cams=15, noise_type="angular", update="random-all", set_anchor="fixed", max_iterations=100);
+# test_mthds = ["gpsfm", "skew_symmetric_vectorized_irls", "subspace_irls"]
+# test_mthds = ["gpsfm", "skew_symmetric_vectorized", "subspace", "subspace_angular"]
+# test_mthds = ["gpsfm", "skew_symmetric_vectorized", "subspace", "subspace_angular"]
+# Err = create_synthetic_environment(0.01, test_mthds; outliers_density=0.0, holes_density=0.0, update_init="all", initialize=true, init_method="gpsfm",  num_cams=25, noise_type="angular", update="order-random-update-all", set_anchor="fixed", max_iterations=100);
 # rad2deg.(mean.(eachcol(Err)))
 
-# gt, init, F = create_synthetic_environment(0.0, test_mthds; outliers_density=0.1, holes_density=0.5, update_init="all", initialize=true, init_method="gpsfm", num_cams=20, noise_type="angular", update="all-random", set_anchor="fixed", max_iterations=100);
-# cams = outer_irls(recover_cameras_iterative, F, init, "skew_symmetric", compute_error, max_iterations=100, δ_irls=1e-4, update_init="all", update="start-centrality-update-all",  set_anchor="fixed");
-# 
-# rad2deg.(mean.(eachcol(compute_error(gt, init, projective_synchronization.angular_distance))))
-# 
-# IF HD <= 0.5, ALWAYS COVERED BY TRIPLETS?
+# UT_outliers, P_gt, P_gpsfm, F, Err = create_synthetic_environment(0.02, test_mthds; outliers_density=0.3, holes_density=0.3, update_init="all", initialize=true, init_method="gpsfm",  num_cams=25, noise_type="angular", update="order-weights-update-all", set_anchor="fixed", max_iterations=100);
 
+# recovered_cameras, Wts = outer_irls(recover_cameras_iterative, F, P_gpsfm, "subspace", compute_error, max_iter_init=55, inner_method_max_it=5, weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy, max_iterations=50, δ_irls=1.0, update_init="all", update="order-weights-update-all",  set_anchor="fixed");
+# recovered_cameras = recover_cameras_iterative(F; X₀=P_gpsfm, weights=wts, method="subspace", update="order-weights-update-all", gt=P_gt, max_iterations=50, δ=1e-5);
+
+
+# n = size(P_gpsfm,1);
+# Ẑ = SparseMatrixCSC{eltype(F), Integer}(repeat([zero(eltype(F))], n,n))
+# compute_multiviewF_from_cams!(0.0,Ẑ,P_gpsfm)
+
+# wts = compute_weights(F, Ẑ, weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy);
+
+# err = compute_error(P_gt, recovered_cameras, projective_synchronization.angular_distance);
+# rad2deg.(mean.(eachcol(err)))
+
+
+
+# println(CartesianIndex(2,4) in UT_outliers)
+# n = size(P_gt,1);
+# Ẑ = SparseMatrixCSC{eltype(F), Integer}(repeat([zero(eltype(F))], n,n));
+# compute_multiviewF_from_cams!(0.0,Ẑ,P_gpsfm)
+# 
+# E_UT = projective_synchronization.angular_distance.(UpperTriangular(F),UpperTriangular(Ẑ));
+# E = E_UT + E_UT';
+# M = ones(Bool, size(F)...);
+# M[diagind(M)] .= false;
+# s = StatsBase.mad( E[.!isinf.(E) .&& M] )
+# wts = projective_synchronization.cauchy.(E/(1*projective_synchronization.c_cauchy*s)) 
+
+
+# F[1,4]
+# Ẑ[1,4]
+
+# n = size(recovered_cameras,1);
+# Ẑ = SparseMatrixCSC{eltype(F), Integer}(repeat([zero(eltype(F))], n,n));
+# compute_multiviewF_from_cams!(0.0,Ẑ,recovered_cameras)
+# E_UT = projective_synchronization.angular_distance.(UpperTriangular(F),UpperTriangular(Ẑ));
+# E = E_UT + E_UT';
+# M = ones(Bool, size(F)...);
+# M[diagind(M)] .= false;
+# s = StatsBase.mad( E[.!isinf.(E) .&& M] )
+# wts = projective_synchronization.welsch.(E/(1*projective_synchronization.c_cauchy*s)) 
+
+
+
+
+
+
+
+# W,F,E = create_synthetic_environment(0.01, test_mthds; outliers_density=0.2, holes_density=0.0, update_init="all", initialize=true, init_method="gpsfm",  num_cams=15, noise_type="angular", update="random-all", set_anchor="fixed", max_iterations=100);
+ 
