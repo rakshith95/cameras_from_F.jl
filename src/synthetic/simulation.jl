@@ -4,44 +4,103 @@ function reverse(a::CartesianIndex)
     return CartesianIndex(Base.reverse(a.I))
 end
 
-function get_triplets(A::AbstractSparseMatrix) 
-    triplets = zeros(Int64, 1,3 )
+function check_if_all_nodes_in_triplets(A::AbstractSparseMatrix) 
     n = size(A,1)
+    for i=tqdm(1:n)
+        rel = findall(x->x>0, view(A,i,1:n)) 
+        in_triplet = false
+        if length(rel) < 2
+            return false
+        end
+        possiblePairs = Combinatorics.combinations(rel, 2)
+        for pair in possiblePairs
+            if !iszero(A[pair...])
+                in_triplet = true
+                break
+            end
+        end
+        if !in_triplet
+            # println(i)
+            # println(rel)
+            return false
+        end
+    end
+    return true
+end
+
+function get_triplets(A::AbstractSparseMatrix) 
+    L = Graphs.laplacian_matrix(Graph(A))
+    n = size(A,1)
+    max_trips = Integer(factorial(big(n))/(factorial(3)*factorial(big(n-3))))
+    triplets = Vector{Vector{Integer}}(undef, max_trips)
+    ct=1
     for i=1:n
-        rel = findall(x->x>0, view(A,i,i+1:n)) .+ i
+        rel = findall(x->x<0, L[i,i+1:n]) .+ i
         if length(rel) < 2
             continue
         end
         possiblePairs = Combinatorics.combinations(rel, 2)
         for pair in possiblePairs
-            if A[pair...] > 0
-                triplets = [triplets; [i, pair[1], pair[2]]']
+            if !iszero(L[pair...])
+                triplets[ct] = [i,pair[1],pair[2]]
+                ct += 1 
             end
         end
     end
-    return triplets[2:end,:]'
+    return triplets[1:ct-1]
 end
 
-function get_triplet_cover(A::AbstractSparseMatrix) 
+function get_triplet_cover(A::AbstractSparseMatrix; max_size=2000) 
     triplets = get_triplets(A)
-    # remove_colinear!(triplets, F;tts_thresh=3e-4)
-    ntriplets = size(triplets, 2)
-    A = sparse(zeros(ntriplets,ntriplets))
+    ntriplets = length(triplets)
+    if ntriplets > max_size
+        triplets = StatsBase.sample(triplets, max_size; replace=false)
+        ntriplets = max_size
+    end
+    A = spzeros(ntriplets,ntriplets)
     for i=1:ntriplets
         for j=i+1:ntriplets
-            t1_pairs = Combinatorics.combinations(view(triplets,:,i), 2)
-            t2_pairs = Combinatorics.combinations(view(triplets,:,j), 2)
-            if any(t1_pairs .∈ Ref(t2_pairs))
+            if length(intersect(triplets[i], triplets[j])) == 2
                 A[i,j] = 1
                 A[j,i] = 1
             end
         end
     end
-
-    cc = Graphs.connected_components(Graph(A))
+    G = Graph(A)
+    cc = Graphs.connected_components(G)
     largest_cc = cc[findmax(length.(cc))[2]]
-    return triplets[:, largest_cc]
+    return Graphs.induced_subgraph(G, largest_cc), triplets
 end
+
+# function get_triplet_cover(A::AbstractSparseMatrix)
+#     num_cams = size(A,1)
+#     triplets = get_triplets(A)
+#     # m = reduce(hcat, t)
+#     index = Dict{Int,Vector{Int}}()
+#     for (i, jj) in enumerate(triplets)
+#         for j in jj
+#             push!(get!(index, j, Int[]), i)
+#         end
+#     end
+    
+#     covered_nodes = Vector{Int}([]);
+#     inds = Vector{Int}([]);
+#     for i=tqdm(1:num_cams)
+#         if length(covered_nodes) == num_cams
+#             break
+#         end
+#         for (ind1, ind2) in tqdm(Combinatorics.combinations(index[i],2))
+#             if length(intersect(triplets[ind1],triplets[ind2])) == 2
+#                 tmp_var = setdiff(unique(union(triplets[ind1], triplets[ind2])), covered_nodes)
+#                 if length(tmp_var) > 0 
+#                     covered_nodes = [covered_nodes; tmp_var]
+#                     inds = [inds;ind1;ind2]
+#                 end
+#             end     
+#         end
+#     end
+#     return covered_nodes, triplets[inds]
+# end
 
 function noise_cameras( σ::T, Ps::Cameras{T}) where T<:AbstractFloat
     θ = abs(rand(Distributions.Normal(0,σ)))
@@ -63,7 +122,6 @@ function noise_F_from_points(σ, P₁::Camera{T}, P₂::Camera{T}, resolution=(1
     return F
 end
 
-# noise_F_from_points(1, Camera{Float64}(rand(3,4)), Camera{Float64}(rand(3,4)) );
 
 function noise_F_gaussian(σ, P₁::Camera{T}, P₂::Camera{T}) where T<:AbstractFloat
     F = F_from_cams(P₁, P₂)
@@ -95,20 +153,20 @@ function create_cameras!(cameras::Cameras, normalize)
     end
 end 
 
-function F_from_cams(Pᵢ::Camera{T}, Pⱼ::Camera{T}) where T
-    # This works only if 1st 3x3 block of cameras is non-singular
-    # Returns Fⱼᵢ
-    Qᵢ = @views Pᵢ[1:3,1:3]
-    Qⱼ = @views Pⱼ[1:3,1:3]
-    Pⱼ_svd = svd(Pⱼ, full=true)
-    Cⱼ = Pⱼ_svd.V[:,end]
-    eᵢ = Pt2D_homo{Float64}(Pᵢ*Cⱼ)
-    eᵢₓ = make_skew_symmetric(eᵢ)
-    Fⱼᵢ = FundMat{T}(inv(Qⱼ)'*Qᵢ'*eᵢₓ)
-    return Fⱼᵢ
-end
+# function F_from_cams(Pᵢ::Camera{T}, Pⱼ::Camera{T}) where T
+#     # This works only if 1st 3x3 block of cameras is non-singular
+#     # Returns Fⱼᵢ
+#     Qᵢ = @views Pᵢ[1:3,1:3]
+#     Qⱼ = @views Pⱼ[1:3,1:3]
+#     Pⱼ_svd = svd(Pⱼ, full=true)
+#     Cⱼ = Pⱼ_svd.V[:,end]
+#     eᵢ = Pt2D_homo{Float64}(Pᵢ*Cⱼ)
+#     eᵢₓ = make_skew_symmetric(eᵢ)
+#     Fⱼᵢ = FundMat{T}(inv(Qⱼ)'*Qᵢ'*eᵢₓ)
+#     return Fⱼᵢ
+# end
 
-function F_from_cams2(Pᵢ::Camera{T}, Pⱼ::Camera{T}) where T
+function F_from_cams(Pᵢ::Camera{T}, Pⱼ::Camera{T}) where T
     Fⱼᵢ = zeros(3,3)
     for i=1:3
         for j=1:3
@@ -147,7 +205,7 @@ end
 function create_synthetic_environment(σ, methods; noise_type="angular", error=projective_synchronization.angular_distance, kwargs...)
     normalize_cameras = get(kwargs, :normalize, true)
     n = get(kwargs, :num_cams, 25)
-    ρ = get(kwargs, :holes_density, 0.4)
+    ρ = get(kwargs, :holes_density, 0.0)
     Ρ = get(kwargs, :outliers_density, 0.0)
     init = get(kwargs, :initialize, false)
     camera_noise = get(kwargs, :camera_noise, 0.0)
@@ -173,8 +231,9 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
         if Graphs.is_connected(G)
             # Check solvability
             # Get nodes not covered by triplets 
-            t = get_triplet_cover(A)
-            nonTriplet_cams = setdiff(  collect(1:n), unique(t))
+            tG, t = get_triplet_cover(A)
+            covered_nodes = unique(reduce(hcat,t))
+            nonTriplet_cams = setdiff( collect(1:n), covered_nodes)
             if length(nonTriplet_cams) == 0
                 break
             else
@@ -202,8 +261,10 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
         A′[UT_outliers] .= 0
         A′[reverse.(UT_outliers)] .= 0.0
         C = rand(4,n);
-        t2 = get_triplet_cover(A′)
-        nonTriplet_cams2 = setdiff(  collect(1:n), unique(t2))
+        tG2, t2 = get_triplet_cover(A′)
+        n2 = unique(reduce(hcat,t2))
+
+        nonTriplet_cams2 = setdiff(  collect(1:n), n2)
         if length(nonTriplet_cams2) == 0
             break
         end
@@ -278,7 +339,7 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
         end
     end
     return errs[:,2:end]
-    # return UT_outliers, gt_cameras, P_init, F_multiview, errs[:,2:end]
+    # return gt_cameras, F_multiview, errs[:,2:end]
 end
 
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Recovering Cameras/finite-solvability')"
@@ -288,57 +349,7 @@ end
 # test_mthds = ["gpsfm", "skew_symmetric_vectorized_irls", "subspace_irls"]
 # test_mthds = ["gpsfm", "skew_symmetric_vectorized", "subspace", "subspace_angular"]
 # test_mthds = ["gpsfm", "skew_symmetric_vectorized", "subspace", "subspace_angular"]
-# Err = create_synthetic_environment(0.01, test_mthds; outliers_density=0.0, holes_density=0.0, update_init="all", initialize=true, init_method="gpsfm",  num_cams=25, noise_type="angular", update="order-random-update-all", set_anchor="fixed", max_iterations=100);
+# F,Err = create_synthetic_environment(0.0, test_mthds; outliers_density=0.0, holes_density=0.0, update_init="all", initialize=true, init_method="gpsfm",  num_cams=25, noise_type="angular", update="order-random-update-all", set_anchor="fixed", max_iterations=100);
 # rad2deg.(mean.(eachcol(Err)))
 
-# UT_outliers, P_gt, P_gpsfm, F, Err = create_synthetic_environment(0.02, test_mthds; outliers_density=0.3, holes_density=0.3, update_init="all", initialize=true, init_method="gpsfm",  num_cams=25, noise_type="angular", update="order-weights-update-all", set_anchor="fixed", max_iterations=100);
-
-# recovered_cameras, Wts = outer_irls(recover_cameras_iterative, F, P_gpsfm, "subspace", compute_error, max_iter_init=55, inner_method_max_it=5, weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy, max_iterations=50, δ_irls=1.0, update_init="all", update="order-weights-update-all",  set_anchor="fixed");
-# recovered_cameras = recover_cameras_iterative(F; X₀=P_gpsfm, weights=wts, method="subspace", update="order-weights-update-all", gt=P_gt, max_iterations=50, δ=1e-5);
-
-
-# n = size(P_gpsfm,1);
-# Ẑ = SparseMatrixCSC{eltype(F), Integer}(repeat([zero(eltype(F))], n,n))
-# compute_multiviewF_from_cams!(0.0,Ẑ,P_gpsfm)
-
-# wts = compute_weights(F, Ẑ, weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy);
-
-# err = compute_error(P_gt, recovered_cameras, projective_synchronization.angular_distance);
-# rad2deg.(mean.(eachcol(err)))
-
-
-
-# println(CartesianIndex(2,4) in UT_outliers)
-# n = size(P_gt,1);
-# Ẑ = SparseMatrixCSC{eltype(F), Integer}(repeat([zero(eltype(F))], n,n));
-# compute_multiviewF_from_cams!(0.0,Ẑ,P_gpsfm)
-# 
-# E_UT = projective_synchronization.angular_distance.(UpperTriangular(F),UpperTriangular(Ẑ));
-# E = E_UT + E_UT';
-# M = ones(Bool, size(F)...);
-# M[diagind(M)] .= false;
-# s = StatsBase.mad( E[.!isinf.(E) .&& M] )
-# wts = projective_synchronization.cauchy.(E/(1*projective_synchronization.c_cauchy*s)) 
-
-
-# F[1,4]
-# Ẑ[1,4]
-
-# n = size(recovered_cameras,1);
-# Ẑ = SparseMatrixCSC{eltype(F), Integer}(repeat([zero(eltype(F))], n,n));
-# compute_multiviewF_from_cams!(0.0,Ẑ,recovered_cameras)
-# E_UT = projective_synchronization.angular_distance.(UpperTriangular(F),UpperTriangular(Ẑ));
-# E = E_UT + E_UT';
-# M = ones(Bool, size(F)...);
-# M[diagind(M)] .= false;
-# s = StatsBase.mad( E[.!isinf.(E) .&& M] )
-# wts = projective_synchronization.welsch.(E/(1*projective_synchronization.c_cauchy*s)) 
-
-
-
-
-
-
-
-# W,F,E = create_synthetic_environment(0.01, test_mthds; outliers_density=0.2, holes_density=0.0, update_init="all", initialize=true, init_method="gpsfm",  num_cams=15, noise_type="angular", update="random-all", set_anchor="fixed", max_iterations=100);
- 
+# Ps = recover_cameras_baselines(F, "sinha");

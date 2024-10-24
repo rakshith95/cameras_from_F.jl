@@ -1,43 +1,3 @@
-function remove_Fs(F_multiview::AbstractSparseMatrix, wts::AbstractMatrix{T}; remove_frac=0.1) where T<:AbstractFloat
-    n = size(wts,1)
-    A_orig = sparse(ones(n,n))
-    A_orig[findall(SparseMatrixCSC{Bool, Integer}(iszero.(F_multiview)))] .= 0
-
-    wts_ut = sort([wts[i,j] for i=1:n for j=i+1:n])
-    
-    num_rm_inds = Int(round(remove_frac*length(wts_ut)))
-    ct = 1
-    C = rand(4,n);
-    for i=1:length(wts_ut) 
-        if (ct > num_rm_inds)
-            break
-        end
-        A = A_orig
-        # Check solvability
-        # Get nodes not covered by triplets 
-        ind = findfirst(==(wts_ut[i]), wts)
-        A[ind] = 0
-        A[reverse(ind)] = 0
-        # t = get_triplet_cover(A)
-        # nonTriplet_cams = setdiff(  collect(1:n), unique(t))
-        # if length(nonTriplet_cams) == 0
-            # F[ind] = SMatrix{3,3,Float64}(zeros(3,3))
-            # F[reverse(ind)] = SMatrix{3,3,Float64}(zeros(3,3))
-            # A_orig = A
-        # solvable = MATLAB.mxcall(:is_finite_solvable, 1, Matrix{Float64}(A), C, "rank")
-        solvable = true
-        if solvable
-            F_multiview[ind] = SMatrix{3,3,Float64}(zeros(3,3))
-            F_multiview[reverse(ind)] = SMatrix{3,3,Float64}(zeros(3,3))
-            A_orig = A
-        else
-            continue
-        end
-        ct +=1
-    end
-    dropzeros!(F_multiview)
-end
-
 function get_NullSpace_ev(A::AbstractMatrix{T}) where {T<:AbstractFloat}
     D = Symmetric(A'*A)
     (λ, ev) = eigen(D, 1:1)
@@ -362,7 +322,6 @@ function subspace_angular_distance(N::AbstractVector, c₀::AbstractVector{T}; w
     end
     return c
 end
-
 
 # P1 = Camera{Float64}(rand(3,4));
 # P2 = Camera{Float64}(rand(3,4));

@@ -33,25 +33,13 @@ function recover_cameras_from_mat(F_filename::String, init_filename::String, nor
      
     P_init = cameras_from_F.Cameras{Float64}([cameras_from_F.Camera{Float64}(inv(N[3*i-2:3*i, 3*i-2:3*i])*P_init[i]) for i=1:size(P_init,1)]);
     # P_init = cameras_from_F.Cameras{Float64}([cameras_from_F.Camera{Float64}(P_init[i]) for i=1:size(P_init,1)]);
-    
-    # n = size(P_init,1);
-    # Ẑ = SparseArrays.SparseMatrixCSC{eltype(F_multiview), Integer}(repeat([zero(eltype(F_multiview))], n,n))
-    # cameras_from_F.compute_multiviewF_from_cams!(0.0,Ẑ,P_init)
-    # wts = cameras_from_F.compute_weights(F_multiview, Ẑ, weight_function=projective_synchronization.cauchy_sq, c=projective_synchronization.c_cauchy)
-    # wts = wts .* inlier_wts
-    # wts = (wts .- minimum(wts))./(maximum(wts) - minimum(wts))
-    # wts[wts.<0.1] .= 0
-
-    #Remove % of F depending on weights, while maintaining solvability
-    # cameras_from_F.remove_Fs(F_multiview, wts,remove_frac=0.1)
 
     # F_multiview = SparseArrays.SparseMatrixCSC{eltype(F_multiview), Integer}(F_multiview .* A)  
     # Ps = cameras_from_F.recover_cameras_iterative(F_multiview; X₀=P_init, method=method, update="order-weights-update-all", min_updates=1, δ=1e-3, set_anchor="fixed", max_iterations=50);
-    Ps, Wts = cameras_from_F.outer_irls(cameras_from_F.recover_cameras_iterative, F_multiview, P_init, method, cameras_from_F.compute_error, max_iter_init=50, inner_method_max_it=5, weight_function=projective_synchronization.cauchy , c=projective_synchronization.c_cauchy, max_iterations=25, δ=0.1, δ_irls=0.5, update_init="all", update="order-weights-update-all",  set_anchor="fixed");
+    Ps, Wts = cameras_from_F.outer_irls(cameras_from_F.recover_cameras_iterative, F_multiview, P_init, method, cameras_from_F.compute_error, max_iter_init=15, inner_method_max_it=5, weight_function=projective_synchronization.cauchy , c=projective_synchronization.c_cauchy, max_iterations=15, δ=1e-3, δ_irls=1e-1 , update_init="all", update="order-weights-update-all", set_anchor="fixed");
     
     Ps_mat = [N[3*i-2:3*i, 3*i-2:3*i]*Matrix(Ps[i]) for i=1:length(Ps) ];
     # Ps_mat = [Matrix(Ps[i]) for i=1:length(Ps) ];
-    # Ps_mat = [Ps_mat[i]/LinearAlgebra.norm(Ps_mat[i]) for i=1:length(Ps) ];
 
     file = MAT.matopen(output_file, "w")
     write(file, "Ps_iterative", Ps_mat)
@@ -71,7 +59,7 @@ function main(args)
     A_file = args[5]
     output_file = args[6]
 
-    method = "subspace"
+    method = "subspace_angular"
 
     recover_cameras_from_mat(F_file, init_file, normMat_file, wts_file, A_file, output_file; method=method)
 end
