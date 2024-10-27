@@ -3,7 +3,7 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothi
     max_it = get(kwargs, :max_iterations, 100)
     max_updates = get(kwargs, :max_updates, max_it)
     min_updates = get(kwargs, :min_updates, 10)
-    δ = get(kwargs, :δ, 1e-6)
+    δ = get(kwargs, :δ, 1e-3)
     initial_updated = get(kwargs, :update_init, "all")
     update_method = get(kwargs, :update, "order-weights-update-all")
     set_anchor = get(kwargs, :anchor, "fixed")
@@ -165,6 +165,6 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothi
         iter += 1
     end
     # println("\n\n")
-    println(iter)
+    # println(iter)
     return Cameras{Float64}(Ps)
 end

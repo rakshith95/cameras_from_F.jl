@@ -9,6 +9,12 @@ function get_NullSpace_svd(A::AbstractMatrix{T};full=false) where {T<:AbstractFl
     return A_svd.V[:, end] #  Last column of V is solution for null space problem
 end
 
+function get_Nullspace_svd_subspace(A::AbstractMatrix{T};full=true, threshold=1e-10 ) where T<:AbstractFloat
+    A_svd = missing
+    A_svd = svd(A,full=full)
+    return A_svd.V[:, end-count(A_svd.S.<threshold)+1:end]
+end
+
 function make_skew_symmetric(x::SVector{3,T}) where T
    return SMatrix{3,3,T}([[0, x[3], -x[2]] [-x[3], 0, x[1]] [x[2], -x[1], 0 ]]) 
 end
@@ -29,7 +35,7 @@ end
 function relative_projectivity( Ps::Cameras{T}, Qs::Cameras{T} ) where T<:AbstractFloat
     L = zeros(1,16)
     for k=1:length(Ps)
-        a =  vec(Qs[k])
+        a = vec(Qs[k])
         L = vcat(L, (a'*a*SMatrix{12,12,T}(I) - a*a') * kron(SMatrix{4,4,T}(I),Ps[k]) )
     end
     L = L[2:end,:]
@@ -313,6 +319,9 @@ function subspace_angular_distance(N::AbstractVector, c₀::AbstractVector{T}; w
             if var2 < 1
                 c = c + wts[i]*((var1)/ sqrt( 1 - var2^2))
             end
+        end            
+        if iszero(c)
+            return c_prev
         end
         c = projective_synchronization.unit_normalize(c)
         it += 1
@@ -322,42 +331,3 @@ function subspace_angular_distance(N::AbstractVector, c₀::AbstractVector{T}; w
     end
     return c
 end
-
-# P1 = Camera{Float64}(rand(3,4));
-# P2 = Camera{Float64}(rand(3,4));
-# P3 = Camera{Float64}(rand(3,4));
-# P4 = Camera{Float64}(rand(3,4));
-# P5 = Camera{Float64}(rand(3,4));
-# 
-# F_12_noised = noise_F_angular(0.2, P2, P1 );
-# F_13_noised = noise_F_angular(0.02, P3, P1);
-# F_14_noised = noise_F_angular(0.02, P4, P1);
-# F_15_noised = noise_F_angular(0.02, P5, P1);
-#  
-# Ps = Cameras{Float64}([P2, P3, P4, P5]);
-# Fs = FundMats{Float64}([F_12_noised, F_13_noised, F_14_noised, F_15_noised]);
-# num_cams = 4
-# for i=1:num_cams
-#     Ps[i] = Ps[i]/norm(Ps[i]);
-#     Fs[i] = Fs[i]/norm(Fs[i]);
-# end
-# D = zeros(16*num_cams, 12)
-# for i=1:num_cams
-    # A = ( kron( (Ps[i]'*Fs[i]') , I₄)*K₃₄) + (kron( I₄, Ps[i]'*Fs[i]' ))
-    # D[(i-1)*16+1:(i-1)*16+16, :] = A
-# end
-
-# @time P1_rec_vec = recover_camera_SkewSymm_vectorization(Ps, Fs, [1, 1, 1, 1.0, 1.0]);
-# @time P1_rec_subspace_l2 = Camera{Float64}(reshape(recover_camera_subspace(Ps, Fs, [1.0, 1.0, 1.0, 1.0]),3,4));
-# @time P = Camera{Float64}(reshape(recover_camera_subspace_angular(Ps, Fs, [1,1,1,1,1.0]), 3,4 ));
-
-# x = vec(P1_rec_vec);
-# norm(D*x)
-# for i=1:num_cams
-    # print(norm(D[(i-1)*16+1:(i-1)*16+16, :]*x ),"\t")
-    # println( norm(obj_i(x, D[(i-1)*16+1:(i-1)*16+16, :])) )
-# end
-
-# rad2deg(projective_synchronization.angular_distance(P1_rec_vec, P1))
-# rad2deg(projective_synchronization.angular_distance(P1_rec_subspace_l2, P1))
-# rad2deg(projective_synchronization.angular_distance(P, P1))

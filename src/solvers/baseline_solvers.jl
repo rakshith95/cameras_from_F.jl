@@ -15,9 +15,9 @@ function get_cams_from_triplet_sinha(F_triplet::FundMats{T}) where T<:AbstractFl
     Fki = F_triplet[2];
     Fkj = F_triplet[3];
 
-    eji = SVector{3,T}(nullspace(Fji'));
-    eki = SVector{3,T}(nullspace(Fki'));
-    ekj = SVector{3,T}(nullspace(Fkj'));
+    eji = SVector{3,T}(get_NullSpace_svd(Fji'));
+    eki = SVector{3,T}(get_NullSpace_svd(Fki'));
+    ekj = SVector{3,T}(get_NullSpace_svd(Fkj'));
 
     Pᵢ = Camera{T}([SMatrix{3,3,T}(I) zeros(3)]);
     Pⱼ = Camera{T}([ make_skew_symmetric(eji)*Fji eji]);
@@ -38,15 +38,18 @@ function get_cams_from_triplet_sinha(F_triplet::FundMats{T}, Ps::Cameras{T}) whe
     Fji = F_triplet[1];
     Fki = F_triplet[2];
     Fkj = F_triplet[3];
-
+    Pᵢ = Ps[1];
+    Aᵢ = Pᵢ[1:3,1:3]
+    aᵢ = Pᵢ[:,end]
+    
     Pⱼ = Ps[2];
 
-    eki = SVector{3,T}(nullspace(Fki'));
-    ekj = SVector{3,T}(nullspace(Fkj'));
+    eki = SVector{3,T}(get_NullSpace_svd(Fki'));
+    ekj = SVector{3,T}(get_NullSpace_svd(Fkj'));
 
     Cⱼ = SVector{4,T}(nullspace(Pⱼ));
 
-    Mₖ = SMatrix{3,4,T}([make_skew_symmetric(eki)*Fki zeros(3)]);
+    Mₖ = SMatrix{3,4,T}([make_skew_symmetric(eki)*Fki*Aᵢ make_skew_symmetric(eki)*Fki*aᵢ]);
     D = [kron(transpose(pinv(Pⱼ)), (make_skew_symmetric(ekj)*eki))  -vec(Fkj) zeros(9); kron(Cⱼ',eki) zeros(3) -ekj];
     sol = D \ [vec(-make_skew_symmetric(ekj)*Mₖ*pinv(Pⱼ));-Mₖ*Cⱼ];
     v = sol[1:4];
@@ -67,14 +70,14 @@ function get_3rd_camera_colombo(F_triplet::FundMats{T}, Ps::Cameras{T}, param_ve
     σⱼ = param_vector[end];
     Pⱼ = Ps[2];
 
-    eij = SVector{3,T}(nullspace(Fji));
-    eji = SVector{3,T}(nullspace(Fji'));
+    eij = SVector{3,T}(get_NullSpace_svd(Fji));
+    eji = SVector{3,T}(get_NullSpace_svd(Fji'));
 
-    eik = SVector{3,T}(nullspace(Fki));
-    eki = SVector{3,T}(nullspace(Fki'));
+    eik = SVector{3,T}(get_NullSpace_svd(Fki));
+    eki = SVector{3,T}(get_NullSpace_svd(Fki'));
     
-    ejk = SVector{3,T}(nullspace(Fkj));
-    ekj = SVector{3,T}(nullspace(Fkj'));
+    ejk = SVector{3,T}(get_NullSpace_svd(Fkj));
+    ekj = SVector{3,T}(get_NullSpace_svd(Fkj'));
     
     Q = -Fki'*make_skew_symmetric(eki)*Fkj*make_skew_symmetric(eji)*Fji
 
@@ -109,7 +112,7 @@ end
 function get_cams_from_triplet_colombo(F_triplet::FundMats{T}) where T<:AbstractFloat
     # Triplets of fundamental matrices Fji, Fki, and Fkj
     Fji = F_triplet[1];
-    eji = SVector{3,T}(nullspace(Fji'));
+    eji = SVector{3,T}(get_NullSpace_svd(Fji'));
 
     # Pᵢ = Camera_canonical;
     Pᵢ = Camera{T}(rand(3,4));
@@ -127,7 +130,7 @@ function get_cams_from_triplet_colombo(F_triplet::FundMats{T}, Ps::Cameras{T}) w
     Pᵣ = Ps[1];
     Pₛ = Ps[2];
 
-    esr = SVector{3,T}(nullspace(Fsr'));
+    esr = SVector{3,T}(get_NullSpace_svd(Fsr'));
     ζ = (1/(Pₛ[:,end]'*make_skew_symmetric(esr)*Fsr*Pᵣ[:,end])) * norm(make_skew_symmetric(esr)*Pₛ[:,end])^2
 
     param_vector_s = (1/ζ)*esr'*Pₛ
@@ -135,74 +138,108 @@ function get_cams_from_triplet_colombo(F_triplet::FundMats{T}, Ps::Cameras{T}) w
     return get_3rd_camera_colombo(F_triplet, Ps, SVector{4,T}(param_vector_s))
 end
 
-function recover_cameras_baselines(F_multiview::AbstractSparseMatrix, method::String; triplet_graph::AbstractSparseMatrix=spzeros(size(F_multiview,1),size(F_multiview,1)), triplets=nothing)
+function recover_cameras_baselines(F_multiview::AbstractSparseMatrix, method::String; triplet_cover=nothing, matlab_data=nothing)
     num_cams = size(F_multiview,1)
     Ps = Vector{Camera{Float64}}(repeat([Camera_canonical], num_cams))
 
-    Adj = spzeros(num_cams,num_cams);
-    for i=1:num_cams
-        for j=i+1:num_cams
-            if !iszero(F_multiview[i,j])
-                Adj[i,j] = 1
-                Adj[j,i] = 1
-            end
+    if !isnothing(matlab_data)
+        triplets = matlab_data["triplets"]
+        ST = matlab_data["ST"]
+        root_node = ST[1,1]
+        triplet_root = triplets[root_node]
+        if contains(method, "colombo")
+            Ps[triplet_root] = get_cams_from_triplet_colombo(F_trips(F_multiview, SVector{3,Int}(sort(triplet_root))))[1]
+        elseif contains(method, "sinha")
+            Ps_root, Fs_root  = get_cams_from_triplet_sinha( F_trips( F_multiview, SVector{3,Int}(sort(triplet_root)) ) )
+            Ps[triplet_root] = Ps_root;
+            F_multiview[triplet_root[3], triplet_root[2]]  = Fs_root[end];
         end
-    end
 
-    if !iszero(triplet_graph)
-        ST = Graphs.prim_mst(Graph(triplet_graph))
-    else
-        tG, triplets = get_triplet_cover(Adj)
-        vmap = tG[2];
-        tG = tG[1];
-        ST = Graphs.kruskal_mst(tG)
-    end
-    ST_dict = Dict{Int,Vector{Int}}()
-    for E in ST
-        push!(get!(ST_dict, E.src,Int[]), E.dst)
-    end
+        covered_nodes = zeros(Bool, num_cams)
+        covered_nodes[triplet_root] .= true
 
+        for i=1:size(ST,1)
+            dest = ST[i,2]
+            new_cam = setdiff(triplets[dest], triplets[ST[i,1]])[1]
+            covered_nodes[new_cam] = true
 
-    root_node = setdiff(collect(1:num_cams), [v.dst for v in ST])[1]
-    triplet_root = triplets[vmap[root_node]]
-
-
-    if contains(method, "colombo")
-        Ps[triplet_root] = get_cams_from_triplet_colombo(F_trips(F_multiview, SVector{3,Int}(sort(triplet_root))))[1]
-    elseif contains(method, "sinha")
-        Ps_root, Fs_root  = get_cams_from_triplet_sinha(F_trips(F_multiview, SVector{3,Int}(sort(triplet_root))))
-        Ps[triplet_root] = Ps_root;
-        F_multiview[triplet_root[3], triplet_root[2]]  = Fs_root[end];
-    end
-
-    covered_nodes = zeros(Bool, num_cams)
-    covered_nodes[triplet_root] .= true
-    nodes_list = Vector{Int}([root_node])
-
-    while !all(covered_nodes)
-        prev_node = nodes_list[1]
-        if !(prev_node in keys(ST_dict))
-            nodes_list = nodes_list[2:end]
-            continue
-        end        
-        dests = ST_dict[prev_node]
-        nodes_list = nodes_list[2:end]
-        nodes_list = [nodes_list; dests]
-        for dest in dests
-            new_cam = setdiff(triplets[vmap[dest]], triplets[vmap[prev_node]])[1]
-            if covered_nodes[new_cam]
-                continue
-            end
             if contains(method, "colombo")
-                Ps[new_cam] = get_cams_from_triplet_colombo( F_trips(F_multiview, SVector{3,Int}([intersect(triplets[vmap[dest]], triplets[vmap[prev_node]]);new_cam])), Ps[intersect(triplets[vmap[dest]], triplets[vmap[prev_node]])] )[1][end]
-            elseif contains(method, "sinha")
-                t = SVector{3,Int}([intersect(triplets[vmap[dest]], triplets[vmap[prev_node]]);new_cam]);
-                Ps_new, Fs_new = get_cams_from_triplet_sinha( F_trips(F_multiview, t), Ps[intersect(triplets[vmap[dest]], triplets[vmap[prev_node]])] )
+                Ps[new_cam] = get_cams_from_triplet_colombo( F_trips(F_multiview, SVector{3,Int}([intersect(triplets[dest], triplets[ST[i,1]]);new_cam]) ), Ps[ sort(intersect(triplets[dest], triplets[ST[i,1]]))] )[1][end]
+            elseif contains(method,"sinha")
+                t = SVector{3,Int}([intersect(triplets[dest], triplets[ST[i,1]]);new_cam]);
+                Ps_new, Fs_new = get_cams_from_triplet_sinha( F_trips(F_multiview, t), Ps[intersect(triplets[dest], triplets[ST[i,1]])] )
                 F_multiview[t[3],t[2]] = Fs_new[end];
                 Ps[new_cam] = Ps_new[end];
             end
-            covered_nodes[new_cam] = true
+        end
+    else
+        if isnothing(triplet_cover)
+            Adj = spzeros(num_cams,num_cams);
+            for i=1:num_cams
+                for j=i+1:num_cams
+                    if !iszero(F_multiview[i,j])
+                        Adj[i,j] = 1
+                        Adj[j,i] = 1
+                    end
+                end
+            end
+            tG, triplets = get_triplet_cover(Adj)
+        else
+            tG, triplets = triplet_cover
+        end
+
+        vmap = tG[2];
+        tG = tG[1];
+        ST = Graphs.kruskal_mst(tG)
+        ST_dict = Dict{Int,Vector{Int}}()
+        for E in ST
+            push!(get!(ST_dict, E.src,Int[]), E.dst)
+        end
+
+        root_node = setdiff(collect(1:num_cams), [v.dst for v in ST])[1]
+        triplet_root = triplets[vmap[root_node]]
+                
+        if contains(method, "colombo")
+            Ps[triplet_root] = get_cams_from_triplet_colombo(F_trips(F_multiview, SVector{3,Int}(sort(triplet_root))))[1]
+        elseif contains(method, "sinha")
+            Ps_root, Fs_root  = get_cams_from_triplet_sinha(F_trips(F_multiview, SVector{3,Int}(sort(triplet_root))))
+            Ps[triplet_root] = Ps_root;
+            F_multiview[triplet_root[3], triplet_root[2]]  = Fs_root[end];
+        end
+        
+        covered_nodes = zeros(Bool, num_cams)
+        covered_nodes[triplet_root] .= true
+        nodes_list = Vector{Int}([root_node])
+        
+        triplet_nodes = zeros(Bool, length(triplets))
+        
+        
+        while !all(covered_nodes)
+            prev_node = nodes_list[1]
+            nodes_list = nodes_list[2:end]
+            if !(prev_node in keys(ST_dict))
+                continue 
+            end        
+            dests = ST_dict[prev_node]
+            nodes_list = [nodes_list; dests]
+            for dest in dests
+                triplet_nodes[vmap[dest]] = true
+                new_cam = setdiff(triplets[vmap[dest]], triplets[vmap[prev_node]])[1]
+                if covered_nodes[new_cam]
+                    continue
+                end
+                if contains(method, "colombo")
+                    Ps[new_cam] = get_cams_from_triplet_colombo( F_trips(F_multiview, SVector{3,Int}([intersect(triplets[vmap[dest]], triplets[vmap[prev_node]]);new_cam])), Ps[intersect(triplets[vmap[dest]], triplets[vmap[prev_node]])] )[1][end]
+                elseif contains(method, "sinha")
+                    t = SVector{3,Int}([intersect(triplets[vmap[dest]], triplets[vmap[prev_node]]);new_cam]);
+                    Ps_new, Fs_new = get_cams_from_triplet_sinha( F_trips(F_multiview, t), Ps[intersect(triplets[vmap[dest]], triplets[vmap[prev_node]])] )
+                    F_multiview[t[3],t[2]] = Fs_new[end];
+                    Ps[new_cam] = Ps_new[end];
+                end
+                covered_nodes[new_cam] = true
+            end
         end
     end
+    
     return Ps
 end

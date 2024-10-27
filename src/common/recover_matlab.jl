@@ -18,19 +18,10 @@ function recover_cameras_from_mat(F_filename::String, init_filename::String, nor
     N = read(norm_file, "normMat")
     close(norm_file)
 
-    wts_file = MAT.matopen(wtsFile)
-    inlier_wts = read(wts_file, "wts")
-    inlier_wts = (inlier_wts .- minimum(inlier_wts))./(maximum(inlier_wts) - minimum(inlier_wts))
-    close(wts_file)
-
-    A_file = MAT.matopen(Afile)
-    A = read(A_file, "VG")
-    close(wts_file)
-
     init_file = MAT.matopen(init_filename)
     P_init =read(init_file, "Ps_gpsfm")
     close(init_file)
-     
+    
     P_init = cameras_from_F.Cameras{Float64}([cameras_from_F.Camera{Float64}(inv(N[3*i-2:3*i, 3*i-2:3*i])*P_init[i]) for i=1:size(P_init,1)]);
     # P_init = cameras_from_F.Cameras{Float64}([cameras_from_F.Camera{Float64}(P_init[i]) for i=1:size(P_init,1)]);
 
@@ -46,22 +37,52 @@ function recover_cameras_from_mat(F_filename::String, init_filename::String, nor
     close(file) 
 end
 
+function recover_cameras_from_mat(F_filename::String, ST_filename::String, triplets_filename::String, output_filename::String, method::String)
+    file = MAT.matopen(F_filename)
+    F = read(file, "FN")
+    close(file)
+    F_multiview = cameras_from_F.wrap(F)
+    
+    st_file = MAT.matopen(ST_filename);
+    st = Matrix{Integer}(read(st_file, "ST"));
+    close(st_file);
+
+    triplets_file = MAT.matopen(triplets_filename);
+    trips = read(triplets_file, "triplets");
+    close(triplets_file)
+
+    trips = [Integer.(trips[i,:]) for i=1:size(trips,1)];
+    mat_data = Dict([("ST",st), ("triplets",trips)]);
+
+    Ps_baseline = cameras_from_F.recover_cameras_baselines(F_multiview, method; matlab_data = mat_data)
+    Ps_mat = [Matrix(Ps_baseline[i]) for i=1:length(Ps_baseline) ];
+
+    output_file = MAT.matopen(output_filename, "w")
+    write(output_file, "Ps_baseline", Ps_mat)
+    close(output_file) 
+end
 
 function mod_huber(r) 
     return 1/max(1e-3, abs(r))
 end
 
 function main(args)
+    method = "baseline colombo"
     F_file = args[1]
-    init_file = args[2]
-    normMat_file = args[3]
-    wts_file = args[4]
-    A_file = args[5]
-    output_file = args[6]
+    ST_file = args[2]
+    triplets_file = args[3]
+    output_file = args[4]
 
-    method = "subspace_angular"
-
-    recover_cameras_from_mat(F_file, init_file, normMat_file, wts_file, A_file, output_file; method=method)
+    if contains(lowercase(method),"baseline")
+        recover_cameras_from_mat(F_file, ST_file, triplets_file, output_file,method)
+    else
+        init_file = args[2]
+        normMat_file = args[3]
+        wts_file = args[4]
+        A_file = args[5]
+        output_file = args[6]    
+        recover_cameras_from_mat(F_file, init_file, normMat_file, wts_file, A_file, output_file; method=method)
+    end
 end
 
 
