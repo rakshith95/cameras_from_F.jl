@@ -1,5 +1,5 @@
 function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothing, weights=ones(size(F_multiview)...), kwargs...) 
-    method = get(kwargs, :method, "subspace")
+    method = get(kwargs, :method, "subspace_angular")
     max_it = get(kwargs, :max_iterations, 100)
     max_updates = get(kwargs, :max_updates, max_it)
     min_updates = get(kwargs, :min_updates, 10)
@@ -99,9 +99,6 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothi
             Random.shuffle!(nodes)
         elseif occursin("weights", lowercase(update_method))
             nodes = sortperm( [ prod(weights[j,Ne[j]])*C[j] for j=1:num_cams], rev=true)
-            # println([ prod(weights[j,Ne[j]])*C[j] for j=1:num_cams][nodes])
-            # println(nodes)
-            # nodes = collect(1:num_cams)
         end
     end
 
@@ -130,8 +127,8 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothi
                 oldP = Ps[j]
                 updated_N = N[updated[N].!=0]
                 F_inds = [ CartesianIndex(j,i) for i in updated_N ]
-                Ps[j] = avg(Ps[updated_N], FundMats{Float64}(F_multiview[F_inds]), weights[F_inds], oldP)
-                # Ps[j] = avg(Ps[updated_N], FundMats{Float64}(F_multiview[F_inds]), weights[F_inds])
+                # Ps[j] = avg(Ps[updated_N], FundMats{Float64}(F_multiview[F_inds]), weights[F_inds], oldP)
+                Ps[j] = avg(Ps[updated_N], FundMats{Float64}(F_multiview[F_inds]), weights[F_inds])
 
                 updated[j] += 1
                 steady[j] = updated[j] >= min_updates && projective_synchronization.angular_distance(vec(oldP), vec(Ps[j])) <= δ

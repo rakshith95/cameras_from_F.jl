@@ -4,6 +4,40 @@ function reverse(a::CartesianIndex)
     return CartesianIndex(Base.reverse(a.I))
 end
 
+function get_max_component(G::SimpleGraph, components::AbstractVector)
+    max_comp = missing
+    max_num = 0 
+    for el in unique(components)
+        g = findall(components .== el);
+        if length(g) > max_num
+            max_num = length(g)
+            max_comp = g
+        end
+    end
+    return induced_subgraph(G, collect(edges(G))[max_comp])
+end
+
+function remove_fraction_edges(M::AbstractSparseMatrix; remove_frac=10, sample=false)
+    n = size(M,1)
+    A_orig = sparse(ones(n,n))
+    A_orig[findall(SparseMatrixCSC{Bool, Integer}(iszero.(M)))] .= 0
+    matches_ut = sort([(M[i,j], CartesianIndex(i,j)) for i=1:n for j=i+1:n if M[i,j]>0])
+    remove_num = Int(round((remove_frac/100)*length(matches_ut)))
+    if sample
+        wts = [(1/match[1]) for match in matches_ut]
+        remove_inds = StatsBase.sample(collect(1:length(matches_ut)), StatsBase.Weights(wts), remove_num, replace=false )
+    else
+        remove_inds = 1:remove_num
+    end
+
+    for el in matches_ut[remove_inds]
+        A_orig[el[2]] = 0 
+        A_orig[reverse(el[2])] = 0
+    end
+    dropzeros!(A_orig)
+    return A_orig
+end
+
 function check_if_all_nodes_in_triplets(A::AbstractSparseMatrix) 
     n = size(A,1)
     for i=tqdm(1:n)
@@ -20,8 +54,6 @@ function check_if_all_nodes_in_triplets(A::AbstractSparseMatrix)
             end
         end
         if !in_triplet
-            # println(i)
-            # println(rel)
             return false
         end
     end
@@ -31,7 +63,7 @@ end
 function get_triplets(A::AbstractSparseMatrix) 
     L = Graphs.laplacian_matrix(Graph(A))
     n = size(A,1)
-    max_trips = Integer(factorial(big(n))/(factorial(3)*factorial(big(n-3))))
+    max_trips = Integer(round(factorial(big(n))/(factorial(3)*factorial(big(n-3)))))
     triplets = Vector{Vector{Integer}}(undef, max_trips)
     ct=1
     for i=1:n
@@ -50,7 +82,7 @@ function get_triplets(A::AbstractSparseMatrix)
     return triplets[1:ct-1]
 end
 
-function get_triplet_cover(A::AbstractSparseMatrix; max_size=20000) 
+function get_triplet_cover(A::AbstractSparseMatrix; max_size=typemax(Int)) 
     triplets = get_triplets(A)
     ntriplets = length(triplets)
     if ntriplets > max_size
@@ -137,6 +169,7 @@ end
 # end
 
 function F_from_cams(Pᵢ::Camera{T}, Pⱼ::Camera{T}) where T
+    # Returns Fⱼᵢ
     Fⱼᵢ = zeros(3,3)
     for i=1:3
         for j=1:3
@@ -200,7 +233,6 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
         A = triu(A,1) + triu(A,1)'
         G = Graph(A)
         if Graphs.is_connected(G)
-            # Check solvability
             # Get nodes not covered by triplets 
             tG, t = get_triplet_cover(A)
             covered_nodes = unique(reduce(hcat,t))
@@ -208,51 +240,54 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
             if length(nonTriplet_cams) == 0
                 break
             else
-
-            C = rand(4,n);
-            solvable = MATLAB.mxcall(:is_finite_solvable, 1, Matrix{Float64}(A), C, "rank")
-            if solvable
-                break
-            end
+                # Check solvability
+                # UNCOMMENT THIS FOR NON TRIPLET EXPERIMENTS
+            # C = rand(4,n);
+            # solvable = MATLAB.mxcall(:is_finite_solvable, 1, Matrix{Float64}(A), C, "rank")
+            # if solvable
+                # break
+            # end
             end
         end
     end
     F_multiview = SparseMatrixCSC{FundMat{Float64}, Int64}(F_multiview .* A)
-    # num_UT = (n*(n-1))/2
-    num_UT =  length(findall(triu(A,1) .!= 0))
-    num_outliers = Int(round(Ρ*num_UT))
-    UT_outliers = missing
-    while true
-        A′ = copy(A)
-        UT_outliers = StatsBase.sample( findall(triu(A,1).!=0), num_outliers, replace=false)
-        if length(UT_outliers) == 0
-            break
-        end
-        # println(UT_outliers)
-        A′[UT_outliers] .= 0
-        A′[reverse.(UT_outliers)] .= 0.0
-        C = rand(4,n);
-        tG2, t2 = get_triplet_cover(A′)
-        n2 = unique(reduce(hcat,t2))
+    if Ρ > 0
+        num_UT =  length(findall(triu(A,1) .!= 0))
+        num_outliers = Int(round(Ρ*num_UT))
+        UT_outliers = missing
+        while true
+            A′ = copy(A)
+            UT_outliers = StatsBase.sample( findall(triu(A,1).!=0), num_outliers, replace=false)
+            if length(UT_outliers) == 0
+                break
+            end
+            # println(UT_outliers)
+            A′[UT_outliers] .= 0
+            A′[reverse.(UT_outliers)] .= 0.0
+            C = rand(4,n);
+            tG2, t2 = get_triplet_cover(A′)
+            n2 = unique(reduce(hcat,t2))
 
-        nonTriplet_cams2 = setdiff(  collect(1:n), n2)
-        if length(nonTriplet_cams2) == 0
-            break
-        end
+            nonTriplet_cams2 = setdiff(  collect(1:n), n2)
+            if length(nonTriplet_cams2) == 0
+                break
+            end
 
-        solvable = MATLAB.mxcall(:is_finite_solvable, 1, Matrix{Float64}(A′), C, "rank")
-        if solvable
-            break
+            solvable = MATLAB.mxcall(:is_finite_solvable, 1, Matrix{Float64}(A′), C, "rank")
+            if solvable
+                break
+            end
+        end
+        
+        for ind in UT_outliers
+            F_out = rand(3,3)
+            F_out_svd = svd(F_out)
+            F_out = F_out_svd.U*diagm([F_out_svd.S[1:end-1];0])*F_out_svd.Vt
+            F_multiview[ind] = FundMat{Float64}(F_out)
+            F_multiview[CartesianIndex(reverse(ind.I))] = F_multiview[ind]'
         end
     end
-
-    for ind in UT_outliers
-        F_out = rand(3,3)
-        F_out_svd = svd(F_out)
-        F_out = F_out_svd.U*diagm([F_out_svd.S[1:end-1];0])*F_out_svd.Vt
-        F_multiview[ind] = FundMat{Float64}(F_out)
-        F_multiview[CartesianIndex(reverse(ind.I))] = F_multiview[ind]'
-    end
+    
     if init
         if occursin("gt", lowercase(init_method)) || occursin("ground truth", lowercase(init_method))
             P_init = noise_cameras(camera_noise, gt_cameras)
@@ -285,7 +320,10 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
     recovered_cameras = nothing
     Wts = nothing
     for method in methods
-        if occursin("gpsfm", lowercase(method)) 
+        if occursin("synch", lowercase(method))
+            recovered_cameras_synch = Cameras{Float64}(MATLAB.mxcall(:runProjectiveSim, 1, F_unwrap, "synch"));
+            errs =  hcat(errs, compute_error(gt_cameras, recovered_cameras_synch, error));
+        elseif occursin("gpsfm", lowercase(method)) 
             if init && occursin("gpsfm", lowercase(init_method)) 
                 errs =  hcat(errs, compute_error(gt_cameras, recovered_cameras_gpsfm, error));
             else
@@ -304,7 +342,7 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
         else
             if occursin("irls", method)
                 recovered_cameras, Wts = outer_irls(recover_cameras_iterative, F_multiview, P_init, method, compute_error, max_iter_init=50, error_measure=projective_synchronization.angular_distance, inner_method_max_it=5, weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy, max_iterations=50, δ_irls=1.0, update_init="all", update="order-weights-update-all",  set_anchor="fixed");
-        else
+            else
                 recovered_cameras = recover_cameras_iterative(F_multiview; X₀=P_init, method=method, kwargs...);
             end
             errs = hcat(errs, compute_error(gt_cameras, recovered_cameras, error))
@@ -317,9 +355,98 @@ end
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Recovering Cameras/finite-solvability')"
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Recovering Cameras/finite-solvability/Finite_solvability')"
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/GPSFM')"
-
-# test_mthds = ["gpsfm"]
+ 
+# test_mthds = ["gpsfm", "synch"];
 # test_mthds = ["gpsfm", "skew_symmetric_vectorized", "subspace", "subspace_angular"]
 # test_mthds = ["gpsfm", "skew_symmetric_vectorized",  "subspace_angular", "baseline colombo", "baseline sinha"]
-# Err = create_synthetic_environment(0.0, test_mthds; outliers_density=0.2, holes_density=0.2, update_init="all", initialize=true, init_method="gpsfm",  num_cams=10, noise_type="angular", update="order-random-update-all", set_anchor="fixed", max_iterations=100);
+# Err = create_synthetic_environment(0.01, test_mthds; outliers_density=0.0, holes_density=0.2, update_init="all", initialize=false, init_method="gpsfm",  num_cams=10, noise_type="angular", update="order-random-update-all", set_anchor="fixed", max_iterations=100);
 # rad2deg.(mean.(eachcol(Err)))
+
+
+
+# folder_name = "MatFiles/nerf_bonsai"
+
+# file = MAT.matopen(folder_name*"/Adj.mat");
+# Adj = sparse(read(file, "A"))
+# close(file)
+# num_v = nv(Graph(Adj))
+# HD = 1 - ne(Graph(Adj))/(num_v*(num_v-1)/2)
+
+# match_file = MAT.matopen(folder_name*"/Matches.mat");
+# Matches = SparseMatrixCSC{Float64, Int64}(read(match_file, "M"));
+# close(match_file)
+
+# F_file = MAT.matopen(folder_name*"/Fs.mat");
+# F = read(F_file, "FN");
+# close(F_file)
+# F_multiview = cameras_from_F.wrap(F)
+ 
+# Ps_file = MAT.matopen(folder_name*"/Ps.mat");
+# Ps_gt = read(Ps_file);
+# close(Ps_file)
+# Ps_gt = sort(Dict(parse(Int,string(k))=>v  for (k,v) in pairs(Ps_gt)));
+# Ps_gt = Cameras{Float64}(getindex.(Ref(Ps_gt), keys(Ps_gt)));
+
+
+# Ps_gpsfm_file = MAT.matopen(folder_name*"/Ps_gpsfm.mat");
+# Ps_gpsfm = read(Ps_gpsfm_file, "Ps_gpsfm");
+# close(Ps_gpsfm_file)
+# recovered_cameras_gpsfm = Cameras{Float64}([Camera{Float64}(Ps_gpsfm[i]) for i=1:size(Ps_gpsfm,1)]);
+
+# F_unwrap = unwrap(F_multiview_new);
+# recovered_cameras_gpsfm = Cameras{Float64}(MATLAB.mxcall(:runProjectiveSim, 0, F_unwrap, "gpsfm", Matches));
+# mean(rad2deg.(compute_error(Ps_gt, recovered_cameras_gpsfm, projective_synchronization.angular_distance)))
+# recovered_cameras = recover_cameras_iterative(F_multiview; X₀=recovered_cameras_gpsfm, method="subspace_angular",  update="order-centrality-update-all");
+# recovered_cameras, Wts = outer_irls(recover_cameras_iterative, F_multiview, recovered_cameras_gpsfm, "subspace_angular", compute_error, max_iter_init=15, inner_method_max_it=5, weight_function=projective_synchronization.cauchy , c=projective_synchronization.c_cauchy, max_iterations=15, δ=1e-3, δ_irls=1e-1 , update_init="all", update="order-weights-update-all", set_anchor="fixed");
+# mean(rad2deg.(compute_error(Ps_gt, recovered_cameras, projective_synchronization.angular_distance)))
+
+
+# if !check_if_all_nodes_in_triplets(Adj)
+    # any(degree(Graph(Adj)) .< 2)
+# end
+
+
+# Adj_new = remove_fraction_edges(Matches; remove_frac=85, sample=false)
+# check_if_all_nodes_in_triplets(Adj_new)
+# tg, trips = get_triplet_cover(Adj_new; max_size=5000);
+# covered_nodes = unique(reduce(hcat,trips))
+# nonTriplet_cams = setdiff( collect(1:size(Adj,1)), covered_nodes)
+
+
+
+# issymmetric(Adj_new)
+# is_connected(Graph(Adj_new))
+# any(degree(Graph(Adj_new)) .< 2)
+
+# C = rand(4,size(Adj_new,1))*100;
+# solvable = MATLAB.mxcall(:is_finite_solvable, 1, Matrix{Float64}(Adj_new), C, "eigs")
+
+# F_multiview_new = SparseMatrixCSC{FundMat{Float64}, Int64}(F_multiview .* Adj_new)
+
+
+# recovered_cameras = recover_cameras_iterative(F_multiview_new; X₀=P_init, method="subspace_angular");
+# recovered_cameras, Wts = outer_irls(recover_cameras_iterative, F_multiview_new, P_init, "subspace_angular", compute_error, max_iter_init=50, error_measure=projective_synchronization.angular_distance, inner_method_max_it=5, weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy, max_iterations=50, δ_irls=1.0, update_init="all", update="order-weights-update-all",  set_anchor="fixed");
+
+
+
+# adj_mod_file = MAT.matopen(folder_name*"/Pruned_Adj.mat", "w")
+# write(adj_mod_file, "A", Adj_new)
+# close(adj_mod_file) 
+
+# F_unwrap = unwrap(F_multiview_new);
+# recovered_cameras_gpsfm = Cameras{Float64}(MATLAB.mxcall(:runProjectiveSim, 0, F_unwrap, "gpsfm", Matches));
+# mean(rad2deg.(compute_error(Ps_gt, recovered_cameras_gpsfm, projective_synchronization.angular_distance)))
+# recovered_cameras = recover_cameras_iterative(F_multiview; X₀=recovered_cameras_gpsfm, method="subspace_angular");
+# recovered_cameras, Wts = outer_irls(recover_cameras_iterative, F_multiview, recovered_cameras_gpsfm, "subspace_angular", compute_error, max_iter_init=15, inner_method_max_it=5, weight_function=projective_synchronization.huber , c=projective_synchronization.c_huber, max_iterations=15, δ=1e-3, δ_irls=1e-1 , update_init="all", update="order-weights-update-all", set_anchor="fixed");
+# mean(rad2deg.(compute_error(Ps_gt, recovered_cameras, projective_synchronization.angular_distance)))
+
+
+# f_file = MAT.matopen(folder_name*"/F_unwrapped.mat", "w")
+# write(f_file, "F", F_unwrap)
+# close(f_file) 
+
+
+# recovered_cameras_baseline_sinha = recover_cameras_baselines(F_multiview, "sinha");
+# mean(rad2deg.(compute_error(Ps_gt, recovered_cameras_baseline_sinha, projective_synchronization.angular_distance)))
+# recovered_cameras_baseline_colombo = recover_cameras_baselines(F_multiview_new, "colombo");
+# mean(rad2deg.(compute_error(Ps_gt, recovered_cameras_baseline_colombo, projective_synchronization.angular_distance)))

@@ -38,10 +38,10 @@ end
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Recovering Cameras/finite-solvability/Finite_solvability')"
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/GPSFM')"
 
-# test_mthds = ["gpsfm", "subspace_angular", "baseline colombo", "baseline sinha" ]
+# test_mthds = ["gpsfm", "synch", "skew_symmetric_vectorized", "subspace", "subspace_angular", "baseline colombo", "baseline sinha" ]
  
-# E_noise_F = sensitivity(create_synthetic_environment, "noise", collect(0.0:0.01:0.05), test_mthds, projective_synchronization.angular_distance; update_init="all", initialize=true, init_method="gpsfm", num_trials=50, holes_density=0.5, num_cams=25, noise_type="angular", update="random-all", set_anchor="fixed", max_iterations=50);
-# E_outliers_F = sensitivity(create_synthetic_environment, "outlier", collect(0.0:0.1:0.5), test_mthds, projective_synchronization.angular_distance; update_init="all", initialize=true, init_method="gpsfm", num_trials=50, holes_density=0.2, num_cams=25, noise_type="angular", update="random-all", set_anchor="fixed");
+# E_noise_F = sensitivity(create_synthetic_environment, "noise", collect(0.0:0.005:0.025), test_mthds, projective_synchronization.angular_distance; update_init="all", initialize=true, init_method="gpsfm", num_trials=100, holes_density=0.4, num_cams=25, noise_type="angular", update="random-all", set_anchor="fixed", max_iterations=50);
+# # E_outliers_F = sensitivity(create_synthetic_environment, "outlier", collect(0.0:0.1:0.5), test_mthds, projective_synchronization.angular_distance; update_init="all", initialize=true, init_method="gpsfm", num_trials=50, holes_density=0.2, num_cams=25, noise_type="angular", update="random-all", set_anchor="fixed");
 
 # Errs_matrix = stack(stack.(E_noise_F)');
 # Errs_matrix = rad2deg.(Errs_matrix);
@@ -57,6 +57,3 @@ end
 # file = MAT.matopen("Outliers_Fs.mat", "w")
 # write(file, "E", Errs_matrix)   
 # close(file)
-
-
-# 1D SFM 

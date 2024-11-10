@@ -28,6 +28,7 @@ function get_cams_from_triplet_sinha(F_triplet::FundMats{T}) where T<:AbstractFl
     sol = D \ [vec(-make_skew_symmetric(ekj)*Mₖ*pinv(Pⱼ));-Mₖ*Cⱼ];
     v = sol[1:4];
     Pₖ = Mₖ + eki*transpose(v);
+    Pₖ = Pₖ/norm(Pₖ)
     
     F̄kj = make_skew_symmetric(ekj)*Pₖ*pinv(Pⱼ);
 
@@ -47,13 +48,14 @@ function get_cams_from_triplet_sinha(F_triplet::FundMats{T}, Ps::Cameras{T}) whe
     eki = SVector{3,T}(get_NullSpace_svd(Fki'));
     ekj = SVector{3,T}(get_NullSpace_svd(Fkj'));
 
-    Cⱼ = SVector{4,T}(nullspace(Pⱼ));
+    Cⱼ = SVector{4,T}(nullspace(Pⱼ)[:,1]);
 
     Mₖ = SMatrix{3,4,T}([make_skew_symmetric(eki)*Fki*Aᵢ make_skew_symmetric(eki)*Fki*aᵢ]);
     D = [kron(transpose(pinv(Pⱼ)), (make_skew_symmetric(ekj)*eki))  -vec(Fkj) zeros(9); kron(Cⱼ',eki) zeros(3) -ekj];
     sol = D \ [vec(-make_skew_symmetric(ekj)*Mₖ*pinv(Pⱼ));-Mₖ*Cⱼ];
     v = sol[1:4];
     Pₖ = Mₖ + eki*transpose(v);
+    Pₖ = Pₖ/norm(Pₖ)
     F̄kj = make_skew_symmetric(ekj)*Pₖ*pinv(Pⱼ);
 
     return Cameras{T}([Ps[1], Pⱼ, Pₖ]), FundMats{T}([Fji, Fki, F̄kj])
@@ -138,7 +140,8 @@ function get_cams_from_triplet_colombo(F_triplet::FundMats{T}, Ps::Cameras{T}) w
     return get_3rd_camera_colombo(F_triplet, Ps, SVector{4,T}(param_vector_s))
 end
 
-function recover_cameras_baselines(F_multiview::AbstractSparseMatrix, method::String; triplet_cover=nothing, matlab_data=nothing)
+function recover_cameras_baselines(bigF::AbstractSparseMatrix, method::String; triplet_cover=nothing, matlab_data=nothing)
+    F_multiview = copy(bigF)
     num_cams = size(F_multiview,1)
     Ps = Vector{Camera{Float64}}(repeat([Camera_canonical], num_cams))
 
@@ -190,7 +193,7 @@ function recover_cameras_baselines(F_multiview::AbstractSparseMatrix, method::St
 
         vmap = tG[2];
         tG = tG[1];
-        ST = Graphs.kruskal_mst(tG)
+        ST = Graphs.prim_mst(tG)
         ST_dict = Dict{Int,Vector{Int}}()
         for E in ST
             push!(get!(ST_dict, E.src,Int[]), E.dst)
@@ -212,34 +215,150 @@ function recover_cameras_baselines(F_multiview::AbstractSparseMatrix, method::St
         nodes_list = Vector{Int}([root_node])
         
         triplet_nodes = zeros(Bool, length(triplets))
-        
-        
-        while !all(covered_nodes)
-            prev_node = nodes_list[1]
-            nodes_list = nodes_list[2:end]
-            if !(prev_node in keys(ST_dict))
-                continue 
-            end        
-            dests = ST_dict[prev_node]
-            nodes_list = [nodes_list; dests]
-            for dest in dests
-                triplet_nodes[vmap[dest]] = true
-                new_cam = setdiff(triplets[vmap[dest]], triplets[vmap[prev_node]])[1]
-                if covered_nodes[new_cam]
-                    continue
+        for (k,v) in ST_dict
+            if all(covered_nodes)
+                break
+            end
+            while length(nodes_list) > 0
+                if all(covered_nodes)
+                    break
                 end
-                if contains(method, "colombo")
-                    Ps[new_cam] = get_cams_from_triplet_colombo( F_trips(F_multiview, SVector{3,Int}([intersect(triplets[vmap[dest]], triplets[vmap[prev_node]]);new_cam])), Ps[intersect(triplets[vmap[dest]], triplets[vmap[prev_node]])] )[1][end]
-                elseif contains(method, "sinha")
-                    t = SVector{3,Int}([intersect(triplets[vmap[dest]], triplets[vmap[prev_node]]);new_cam]);
-                    Ps_new, Fs_new = get_cams_from_triplet_sinha( F_trips(F_multiview, t), Ps[intersect(triplets[vmap[dest]], triplets[vmap[prev_node]])] )
-                    F_multiview[t[3],t[2]] = Fs_new[end];
-                    Ps[new_cam] = Ps_new[end];
+                prev_node = nodes_list[1]
+                nodes_list = nodes_list[2:end]
+                if !(prev_node in keys(ST_dict))
+                    continue 
+                end        
+                dests = ST_dict[prev_node]
+                nodes_list = [nodes_list; dests]
+                for dest in dests
+                    triplet_nodes[vmap[dest]] = true
+                    new_cam = setdiff(triplets[vmap[dest]], triplets[vmap[prev_node]])[1]
+                    if covered_nodes[new_cam]
+                        continue
+                    end
+                    if contains(method, "colombo")
+                        Ps[new_cam] = get_cams_from_triplet_colombo( F_trips(F_multiview, SVector{3,Int}([intersect(triplets[vmap[dest]], triplets[vmap[prev_node]]);new_cam])), Ps[intersect(triplets[vmap[dest]], triplets[vmap[prev_node]])] )[1][end]
+                    elseif contains(method, "sinha")
+                        t = SVector{3,Int}([intersect(triplets[vmap[dest]], triplets[vmap[prev_node]]);new_cam]);
+                        Ps_new, Fs_new = get_cams_from_triplet_sinha( F_trips(F_multiview, t), Ps[intersect(triplets[vmap[dest]], triplets[vmap[prev_node]])] )
+                        F_multiview[t[3],t[2]] = Fs_new[end];
+                        Ps[new_cam] = Ps_new[end];
+                    end
+                    covered_nodes[new_cam] = true
                 end
-                covered_nodes[new_cam] = true
+            end
+            nodes_list = [nodes_list; k]
+        end
+    end
+    return Ps
+end
+
+function recover_cameras_baselines_general(bigF::AbstractSparseMatrix, method::String, virtual=true) 
+    F_multiview = copy(bigF)
+    num_cams = size(F_multiview,1)
+    Ps = Vector{Camera{Float64}}(repeat([Camera_canonical], num_cams))
+    Adj = spzeros(num_cams,num_cams);
+    for i=1:num_cams
+        for j=i+1:num_cams
+            if !iszero(F_multiview[i,j])
+                Adj[i,j] = 1
+                Adj[j,i] = 1
             end
         end
     end
+    triplets = get_triplets(Adj)
+    if length(triplets) == 0
+        println("No triplet found")
+        return false
+    end
     
+    can_extend = false
+    extend_node = 0 
+    iters = 1
+    triplet_root = triplets[iters]
+    while !can_extend
+        if iters >= length(triplets)
+            break
+        end
+        for i=1:num_cams
+            if i in triplet_root
+                continue
+            end
+            if length(intersect(findall(x->x>0, view(Adj,i,1:num_cams)), triplet_root)) >= 2
+                can_extend = true
+                extend_node = i
+                break
+            end
+        end
+        if !can_extend
+            iters += 1
+            triplet_root = triplets[iters]
+        end
+    end
+    if !can_extend
+        return false
+    end
+
+    if contains(method, "colombo")
+        Ps[triplet_root] = get_cams_from_triplet_colombo(F_trips(F_multiview, SVector{3,Int}(sort(triplet_root))))[1]
+    elseif contains(method, "sinha")
+        Ps_root, Fs_root  = get_cams_from_triplet_sinha(F_trips(F_multiview, SVector{3,Int}(sort(triplet_root))))
+        Ps[triplet_root] = Ps_root;
+        F_multiview[triplet_root[3], triplet_root[2]]  = Fs_root[end];
+    end
+
+    covered_nodes = zeros(Bool, num_cams)
+    covered_nodes[triplet_root] .= true
+
+    next_nodes = Vector{Int}([extend_node])
+    iters = 0
+
+    while !all(covered_nodes)
+        if iters>1e3
+            break
+        end
+        covered_cams = findall(x->x==true, covered_nodes)
+        new_cam = next_nodes[1]
+        next_nodes = next_nodes[2:end]
+        new_cam_neighbors = findall(x->x>0, view(Adj,new_cam,1:num_cams))
+        common = intersect(new_cam_neighbors, covered_cams)
+        if length(common) < 2
+            continue
+        end
+        next_nodes = [next_nodes; new_cam_neighbors]
+
+        possiblePairs = Combinatorics.combinations(common, 2)
+        wts = map(x -> Float64(Adj[x...]), possiblePairs)
+        if all(wts .== 0)
+            wts = ones(size(wts))
+        end
+        common_pair = StatsBase.sample(collect(possiblePairs), StatsBase.Weights(wts))
+        # common_pair = common[1:2]
+        if Adj[common_pair...] == 0
+            F_multiview[common_pair...] = F_from_cams(Ps[common_pair[2]], Ps[common_pair[1]])
+            F_multiview[reverse(common_pair)...] = F_multiview[common_pair...]'
+            # Adj[common_pair...] = 1 
+            # Adj[reverse(common_pair)...] = 1 
+        end
+
+        if contains(method, "colombo")
+            Ps[new_cam] = get_cams_from_triplet_colombo( F_trips(F_multiview, SVector{3,Int}([common_pair;new_cam])), Ps[common_pair] )[1][end]
+        elseif contains(method, "sinha")
+            t = SVector{3,Int}([common_pair;new_cam]);
+            Ps_new, Fs_new = get_cams_from_triplet_sinha( F_trips(F_multiview, t), Ps[common_pair] )
+            F_multiview[t[3],t[2]] = Fs_new[end];
+            Ps[new_cam] = Ps_new[end];
+        end
+        covered_nodes[new_cam] = true
+        iters += 1
+    end
     return Ps
 end
+
+# test_mthds = ["baseline_sinha"]
+# test_mthds = [];
+# Ps_gt, F, Err = create_synthetic_environment(0.01, test_mthds; holes_density=0.6,  initialize=false,  num_cams=10, noise_type="angular");
+# Ps = recover_cameras_baselines_general(F, "sinha");
+# mean(rad2deg.(compute_error(Ps_gt, Ps, projective_synchronization.angular_distance)))
+# Ps = recover_cameras_baselines(F, "sinha");
+# mean(rad2deg.(compute_error(Ps_gt, Ps, projective_synchronization.angular_distance)))

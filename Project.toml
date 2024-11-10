@@ -29,6 +29,7 @@ projective_synchronization = "804a50dd-d364-4a40-8def-afc57beda7bf"
 
 [compat]
 GraphPlot = "0.6.0"
+MATLAB = "0.8.4"
 Revise = "3.6.2"
 SimpleWeightedGraphs = "1.4.0"
 projective_synchronization = "0.1.1"
