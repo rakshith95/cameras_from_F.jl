@@ -51,33 +51,6 @@ function outer_irls(iterative_fn, input_var::SparseMatrixCSC, X₀::AbstractVect
         end
         X_prev = X
     end
-    println(iter)
+    # println(iter)
     return X_prev, wts
-end
-
-
-function l1_nullspace_irls(Ps::Cameras{T}, Fs::FundMats{T}, wts = ones(length(Ps)), P₀=nothing; weight_function=projective_synchronization.huber, c=projective_synchronization.c_huber, recover_camera=recover_camera_subspace, max_iter=50, convergence_δ=1e-4) where T<:AbstractFloat
-    converge = false
-    iter = 0
-    Ns = [nullspace( (kron( (Ps[i]'*Fs[i]') , I₄)*K₃₄) + (kron( I₄, Ps[i]'*Fs[i]' )) ) for i=1:length(Ps)];
-    x = vec(recover_camera(Ps,Fs, wts, P₀))
-    
-
-    while !converge && iter < max_iter
-        x_prev = copy(x)
-        iter += 1
-
-        r = [norm(subspace_obj_i(x,Ns[i])) for i=1:length(Ps)]
-        s = StatsBase.mad(r)
-        if isapprox(s,0.0)
-            s = 1e-10
-        end
-        wts = weight_function.(r./(c*s))
-        x = vec(recover_camera(Ps,Fs, wts, x_prev))
-        if norm(x-x_prev) < convergence_δ
-            converge = true
-        end
-    end
-    # println(wts)
-    return x
 end

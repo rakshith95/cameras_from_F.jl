@@ -63,14 +63,14 @@ end
 
 
 function get_3rd_camera_colombo(F_triplet::FundMats{T}, Ps::Cameras{T}, param_vector::SVector{4,T}) where T<:AbstractFloat
-    Fji = F_triplet[1];
-    Fki = F_triplet[2];
-    Fkj = F_triplet[3];
+    Fji = @views F_triplet[1];
+    Fki = @views F_triplet[2];
+    Fkj = @views F_triplet[3];
 
-    Pᵢ = Ps[1];
-    ρⱼ = param_vector[1:3];
-    σⱼ = param_vector[end];
-    Pⱼ = Ps[2];
+    Pᵢ = @views Ps[1];
+    ρⱼ = @views param_vector[1:3];
+    σⱼ = @views param_vector[end];
+    Pⱼ = @views Ps[2];
 
     eij = SVector{3,T}(get_NullSpace_svd(Fji));
     eji = SVector{3,T}(get_NullSpace_svd(Fji'));
@@ -257,6 +257,8 @@ function recover_cameras_baselines_general(bigF::AbstractSparseMatrix, method::S
     F_multiview = copy(bigF)
     num_cams = size(F_multiview,1)
     Ps = Vector{Camera{Float64}}(repeat([Camera_canonical], num_cams))
+    covered_nodes = zeros(Bool, num_cams)
+    
     Adj = spzeros(num_cams,num_cams);
     for i=1:num_cams
         for j=i+1:num_cams
@@ -269,7 +271,7 @@ function recover_cameras_baselines_general(bigF::AbstractSparseMatrix, method::S
     triplets = get_triplets(Adj)
     if length(triplets) == 0
         println("No triplet found")
-        return false
+        return Ps, covered_nodes
     end
     
     can_extend = false
@@ -296,7 +298,9 @@ function recover_cameras_baselines_general(bigF::AbstractSparseMatrix, method::S
         end
     end
     if !can_extend
-        return false
+        println("CANT EXTEND")
+        return Ps, covered_nodes
+
     end
 
     if contains(method, "colombo")
@@ -307,7 +311,6 @@ function recover_cameras_baselines_general(bigF::AbstractSparseMatrix, method::S
         F_multiview[triplet_root[3], triplet_root[2]]  = Fs_root[end];
     end
 
-    covered_nodes = zeros(Bool, num_cams)
     covered_nodes[triplet_root] .= true
 
     next_nodes = Vector{Int}([extend_node])
@@ -352,7 +355,7 @@ function recover_cameras_baselines_general(bigF::AbstractSparseMatrix, method::S
         covered_nodes[new_cam] = true
         iters += 1
     end
-    return Ps
+    return Ps, covered_nodes
 end
 
 # test_mthds = ["baseline_sinha"]

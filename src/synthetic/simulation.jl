@@ -17,17 +17,23 @@ function get_max_component(G::SimpleGraph, components::AbstractVector)
     return induced_subgraph(G, collect(edges(G))[max_comp])
 end
 
-function remove_fraction_edges(M::AbstractSparseMatrix; remove_frac=10, sample=false)
+function remove_fraction_edges(M::AbstractSparseMatrix; remove_frac=10, sample=false, threshold=0.0)
     n = size(M,1)
     A_orig = sparse(ones(n,n))
     A_orig[findall(SparseMatrixCSC{Bool, Integer}(iszero.(M)))] .= 0
     matches_ut = sort([(M[i,j], CartesianIndex(i,j)) for i=1:n for j=i+1:n if M[i,j]>0])
+    scores_ut = [m[1] for m in matches_ut]
     remove_num = Int(round((remove_frac/100)*length(matches_ut)))
     if sample
         wts = [(1/match[1]) for match in matches_ut]
         remove_inds = StatsBase.sample(collect(1:length(matches_ut)), StatsBase.Weights(wts), remove_num, replace=false )
     else
-        remove_inds = 1:remove_num
+        if threshold > 0
+            remove_inds = findall(scores_ut .< threshold)
+        else
+            remove_inds = 1:remove_num
+        end
+            
     end
 
     for el in matches_ut[remove_inds]
@@ -85,6 +91,7 @@ end
 function get_triplet_cover(A::AbstractSparseMatrix; max_size=typemax(Int)) 
     triplets = get_triplets(A)
     ntriplets = length(triplets)
+    # println(ntriplets)
     if ntriplets > max_size
         triplets = StatsBase.sample(triplets, max_size; replace=false)
         ntriplets = max_size
@@ -100,6 +107,9 @@ function get_triplet_cover(A::AbstractSparseMatrix; max_size=typemax(Int))
     end
     G = Graph(A)
     cc = Graphs.connected_components(G)
+    if length(cc) == 0
+        return nothing
+    end
     largest_cc = cc[findmax(length.(cc))[2]]
     return Graphs.induced_subgraph(G, largest_cc), triplets
 end
@@ -194,7 +204,11 @@ function compute_multiviewF_from_cams!(σ, F_multiview::AbstractSparseMatrix, ca
                 continue
             end
             if occursin("angular", noise_type)
-                F_multiview[i,j] = noise_F_angular(σ, cams[j], cams[i])
+                if isequal(cams[j],Camera_canonical) && isequal(cams[i], Camera_canonical)
+                    F_multiview[i,j] = FundMat{T}(zeros(3,3))
+                else
+                    F_multiview[i,j] = noise_F_angular(σ, cams[j], cams[i])
+                end
             elseif occursin("points", noise_type)
                 F_multiview[i,j] = noise_F_from_points(σ, cams[j], cams[i])
             elseif occursin("gaussian", noise_type)
@@ -211,9 +225,8 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
     ρ = get(kwargs, :holes_density, 0.0)
     Ρ = get(kwargs, :outliers_density, 0.0)
     init = get(kwargs, :initialize, false)
-    camera_noise = get(kwargs, :camera_noise, 0.0)
-    missing_initial = get(kwargs, :missing_initial, 0.0)
-    init_method = get(kwargs, :init_method, "gpsfm")
+    missing_initials = get(kwargs, :missing_initial, [0.0])
+    init_methods = get(kwargs, :init_methods, ["gpsfm"])
 
     gt_cameras = Cameras{Float64}(repeat([Camera(zeros(3,4))], n))
     create_cameras!(gt_cameras, normalize_cameras)
@@ -221,11 +234,15 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
     compute_multiviewF_from_cams!(σ, F_multiview, gt_cameras, noise_type=noise_type)
         
     errs = zeros(n, 1)
+    times = zeros(length(methods))
+    recovered_cams = Vector{Float64}(undef, length(methods))
+
     A = missing
     G = missing
     nonTriplet_cams = []
     t = missing
     tG = missing
+    trips_time = missing
     while true
         A = sprand(n,n, ρ)
         A[A.!=0] .= 1.0
@@ -234,22 +251,28 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
         G = Graph(A)
         if Graphs.is_connected(G)
             # Get nodes not covered by triplets 
-            tG, t = get_triplet_cover(A)
-            covered_nodes = unique(reduce(hcat,t))
+            trips_time = @elapsed T = get_triplet_cover(A)
+            if isnothing(T)
+                continue
+            else
+                tG, t = T
+            end
+            covered_nodes = unique(reduce(hcat,t[tG[2][1:nv(tG[1])]]))
             nonTriplet_cams = setdiff( collect(1:n), covered_nodes)
             if length(nonTriplet_cams) == 0
                 break
             else
-                # Check solvability
-                # UNCOMMENT THIS FOR NON TRIPLET EXPERIMENTS
+            # Check solvability
+            # UNCOMMENT THIS FOR NON TRIPLET EXPERIMENTS
             # C = rand(4,n);
-            # solvable = MATLAB.mxcall(:is_finite_solvable, 1, Matrix{Float64}(A), C, "rank")
+            # solvable = MATLAB.mxcall(:is_finite_solvable, 1, Matrix{Float64}(A), C, "eigs")
             # if solvable
                 # break
             # end
             end
         end
     end
+    recovered_cams_trips = n - length(nonTriplet_cams)
     F_multiview = SparseMatrixCSC{FundMat{Float64}, Int64}(F_multiview .* A)
     if Ρ > 0
         num_UT =  length(findall(triu(A,1) .!= 0))
@@ -261,19 +284,18 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
             if length(UT_outliers) == 0
                 break
             end
-            # println(UT_outliers)
             A′[UT_outliers] .= 0
             A′[reverse.(UT_outliers)] .= 0.0
-            C = rand(4,n);
-            tG2, t2 = get_triplet_cover(A′)
-            n2 = unique(reduce(hcat,t2))
-
-            nonTriplet_cams2 = setdiff(  collect(1:n), n2)
+            
+            tG2 , t2 = get_triplet_cover(A)
+            covered_nodes2 = unique(reduce(hcat,t2[tG2[2][1:nv(tG2[1])]]))
+            nonTriplet_cams2 = setdiff( collect(1:n), covered_nodes2)
             if length(nonTriplet_cams2) == 0
                 break
             end
-
-            solvable = MATLAB.mxcall(:is_finite_solvable, 1, Matrix{Float64}(A′), C, "rank")
+            
+            C = rand(4,n);
+            solvable = MATLAB.mxcall(:is_finite_solvable, 1, Matrix{Float64}(A′), C, "eigs")
             if solvable
                 break
             end
@@ -287,19 +309,28 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
             F_multiview[CartesianIndex(reverse(ind.I))] = F_multiview[ind]'
         end
     end
-    
-    if init
-        if occursin("gt", lowercase(init_method)) || occursin("ground truth", lowercase(init_method))
-            P_init = noise_cameras(camera_noise, gt_cameras)
-        elseif occursin("gpsfm", lowercase(init_method)) 
+    F_multiview_gpsfm = missing
+    recovered_cameras_gpsfm = missing
+    gpsfm_results = missing
+    t₀ = 0
+    for init_method in init_methods
+        P_init = Vector{Camera{Float64}}(repeat([Camera_canonical], n))
+        if occursin("gpsfm", lowercase(init_method)) || occursin("sinha", lowercase(init_method)) || occursin("colombo", lowercase(init_method)) 
             # Remove these nodes and input to GPSFM
             F_multiview_gpsfm = F_multiview[1:end .∉ Ref(nonTriplet_cams), 1:end .∉ Ref(nonTriplet_cams)]
             F_unwrap = unwrap(F_multiview_gpsfm);
-            recovered_cameras_gpsfm = Cameras{Float64}(MATLAB.mxcall(:runProjectiveSim, 1, F_unwrap, "gpsfm"));
-            
-            P_init = Vector{Camera{Float64}}(repeat([Camera_canonical], n))
-            P_init[intersect(collect(1:n), unique(reduce(hcat,t)))] = recovered_cameras_gpsfm            
-            
+            if occursin("gpsfm", lowercase(init_method))
+                gpsfm_results = MATLAB.mxcall(:runProjectiveSim, 2, F_unwrap, "gpsfm");
+                t₀ = gpsfm_results[2]          
+                recovered_cameras_gpsfm = Cameras{Float64}(gpsfm_results[1]);
+                P_init[intersect(collect(1:n), unique(reduce(hcat,t[tG[2][1:nv(tG[1])]])) )] = recovered_cameras_gpsfm            
+            elseif occursin("sinha", lowercase(init_method))
+                t₀ = @elapsed recovered_cameras = recover_cameras_baselines(F_multiview_gpsfm, "sinha"; triplet_cover=(tG,t))
+                P_init[intersect(collect(1:n), unique(reduce(hcat,t[tG[2][1:nv(tG[1])]])) )] = recovered_cameras 
+            else
+                t₀ = @elapsed recovered_cameras = recover_cameras_baselines(F_multiview_gpsfm, "colombo"; triplet_cover=(tG,t))
+                P_init[intersect(collect(1:n), unique(reduce(hcat,t[tG[2][1:nv(tG[1])]])) )] = recovered_cameras
+            end  
         elseif occursin("rand", lowercase(init_method))
             P_init = Vector{Camera{Float64}}(repeat([rand(3,4)], n))
             for i=1:n
@@ -308,145 +339,197 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
         elseif occursin("spanning", lowercase(init_method)) || occursin("tree", lowercase(init_method))
             P_init = recover_camera_SpanningTree(F_multiview)
         end
-        init_missing = StatsBase.sample(collect(1:length(P_init)), Int(round(missing_initial*length(P_init))) )
-        for i=1:length(P_init)
-            if i in init_missing
-                P_init[i] = Camera_canonical
+
+        for missing_initial in missing_initials
+            P_init_cpy = copy(P_init)
+            init_missing = StatsBase.sample(collect(1:length(P_init)), Int(round(missing_initial*length(P_init))), replace=false )
+            for i=1:length(P_init)
+                if i in init_missing
+                    P_init_cpy[i] = Camera_canonical
+                end
+            end
+            recovered_cameras = nothing
+            Wts = nothing
+            for (ct,method) in enumerate(methods)
+                if occursin("synch", lowercase(method))
+                    synch_results = MATLAB.mxcall(:runProjectiveSim, 2, F_unwrap, "synch")
+                    recovered_cameras_synch = Cameras{Float64}(synch_results[1]);
+                    err = compute_error(gt_cameras[1:n .∉ Ref(nonTriplet_cams)], recovered_cameras_synch, error);
+                    errs =  hcat(errs,[err;ones(length(nonTriplet_cams))*mean(err)] );
+                    times[ct] = synch_results[2]
+                    recovered_cams[ct] = recovered_cams_trips
+                elseif occursin("gpsfm", lowercase(method)) 
+                    if init && any(occursin.("gpsfm", lowercase.(init_methods)) )
+                        err = compute_error(gt_cameras[1:n .∉ Ref(nonTriplet_cams)], recovered_cameras_gpsfm, error);
+                        if iszero(missing_initial)
+                            errs =  hcat(errs,[err;ones(length(nonTriplet_cams))*mean(err)] );
+                        end
+                        times[ct] = gpsfm_results[2]
+                        recovered_cams[ct] = recovered_cams_trips
+                    else
+                        F_unwrap = unwrap(F_multiview);
+                        gpsfm_results = MATLAB.mxcall(:runProjectiveSim, 2, F_unwrap, "gpsfm")
+                        recovered_cameras_gpsfm = Cameras{Float64}(gpsfm_results[1]);
+                        err = compute_error(gt_cameras[1:n .∉ Ref(nonTriplet_cams)], recovered_cameras_gpsfm, error);
+                        errs =  hcat(errs,[err;ones(length(nonTriplet_cams))*mean(err)] );
+                        times[ct] = gpsfm_results[2]
+                        recovered_cams[ct] = recovered_cams_trips
+                    end
+                elseif occursin("baseline", lowercase(method))
+                    if occursin("colombo", lowercase(method))
+                        if length(nonTriplet_cams) < 1
+                            times[ct] = @elapsed recovered_cameras_colombo = recover_cameras_baselines(F_multiview_gpsfm, "colombo"; triplet_cover=(tG,t))
+                            times[ct] += trips_time
+                        else
+                            times[ct] = @elapsed recovered_cameras_colombo = recover_cameras_baselines(F_multiview_gpsfm, "colombo")
+                        end
+                        err = compute_error(gt_cameras[1:n .∉ Ref(nonTriplet_cams)], recovered_cameras_colombo, error);
+                        errs =  hcat(errs,[err;ones(length(nonTriplet_cams))*mean(err)] );
+                        recovered_cams[ct] = recovered_cams_trips
+                    elseif occursin("sinha", lowercase(method))
+                        if length(nonTriplet_cams) < 1
+                            times[ct] = @elapsed recovered_cameras_sinha = recover_cameras_baselines(F_multiview, "sinha"; triplet_cover=(tG,t))
+                            times[ct] += trips_time
+                            err = compute_error(gt_cameras, recovered_cameras_sinha, error)
+                            errs =  hcat(errs, err);
+                            recovered_cams[ct] = n
+                        else
+                            times[ct] = @elapsed recovered_cameras_sinha, covered_nodes = recover_cameras_baselines_general(F_multiview, "sinha")
+                            if count(!iszero,covered_nodes) < 1
+                                err = compute_error(gt_cameras, recovered_cameras_sinha, error)
+                                errs = hcat(errs, err)
+                                recovered_cams[ct] = 0
+                            else
+                                err = compute_error(gt_cameras[covered_nodes], recovered_cameras_sinha[covered_nodes], error)
+                                errs =  hcat(errs, [err;ones(size(errs,1) - length(err))*mean(err)]);
+                                recovered_cams[ct] = count(!iszero,covered_nodes)
+                            end
+                        end
+        
+                    end
+                else
+                    if occursin("irls", method)
+                        ti = @elapsed recovered_cameras, Wts = outer_irls(recover_cameras_iterative, F_multiview, P_init_cpy, method, compute_error, max_iter_init=50, error_measure=projective_synchronization.angular_distance, inner_method_max_it=5, weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy, max_iterations=50, δ_irls=1.0, update_init="all", update="order-weights-update-all",  set_anchor="fixed");
+                        recovered_cams[ct] = n
+                        times[ct] = t₀ + ti
+                    else
+                        ti = @elapsed recovered_cameras = recover_cameras_iterative(F_multiview; X₀=P_init_cpy, method=method, kwargs...);
+                        recovered_cams[ct] = n
+                        times[ct] = t₀ + ti
+                    end
+                    errs = hcat(errs, compute_error(gt_cameras, recovered_cameras, error))
+                end
             end
         end
-    else
-        P_init = nothing
     end
-    recovered_cameras = nothing
-    Wts = nothing
-    for method in methods
-        if occursin("synch", lowercase(method))
-            recovered_cameras_synch = Cameras{Float64}(MATLAB.mxcall(:runProjectiveSim, 1, F_unwrap, "synch"));
-            errs =  hcat(errs, compute_error(gt_cameras, recovered_cameras_synch, error));
-        elseif occursin("gpsfm", lowercase(method)) 
-            if init && occursin("gpsfm", lowercase(init_method)) 
-                errs =  hcat(errs, compute_error(gt_cameras, recovered_cameras_gpsfm, error));
-            else
-                F_unwrap = unwrap(F_multiview);
-                recovered_cameras_gpsfm = Cameras{Float64}(MATLAB.mxcall(:runProjectiveSim, 1, F_unwrap, "gpsfm"));
-                errs =  hcat(errs, compute_error(gt_cameras, recovered_cameras_gpsfm, error));
-            end
-        elseif occursin("baseline", lowercase(method))
-            if occursin("colombo", lowercase(method))
-                recovered_cameras_colombo = recover_cameras_baselines(F_multiview, "colombo"; triplet_cover = (tG, t))
-                errs =  hcat(errs, compute_error(gt_cameras, recovered_cameras_colombo, error));
-            elseif occursin("sinha", lowercase(method))
-                recovered_cameras_sinha = recover_cameras_baselines(F_multiview, "sinha"; triplet_cover = (tG, t))
-                errs =  hcat(errs, compute_error(gt_cameras, recovered_cameras_sinha, error));
-            end
-        else
-            if occursin("irls", method)
-                recovered_cameras, Wts = outer_irls(recover_cameras_iterative, F_multiview, P_init, method, compute_error, max_iter_init=50, error_measure=projective_synchronization.angular_distance, inner_method_max_it=5, weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy, max_iterations=50, δ_irls=1.0, update_init="all", update="order-weights-update-all",  set_anchor="fixed");
-            else
-                recovered_cameras = recover_cameras_iterative(F_multiview; X₀=P_init, method=method, kwargs...);
-            end
-            errs = hcat(errs, compute_error(gt_cameras, recovered_cameras, error))
-        end
-    end
+
     return errs[:,2:end]
-    # return gt_cameras, F_multiview, errs[:,2:end]
+    # return errs[:,2:end], recovered_cams
+    # return times
 end
 
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Recovering Cameras/finite-solvability')"
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Recovering Cameras/finite-solvability/Finite_solvability')"
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/GPSFM')"
+# # MATLAB.mat"addpath('/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/GPSFM/3rdparty/fromPPSFM/')"
+# MATLAB.mat"addpath('/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/GPSFM/3rdparty/vgg_code/')"
  
-# test_mthds = ["gpsfm", "synch"];
-# test_mthds = ["gpsfm", "skew_symmetric_vectorized", "subspace", "subspace_angular"]
-# test_mthds = ["gpsfm", "skew_symmetric_vectorized",  "subspace_angular", "baseline colombo", "baseline sinha"]
-# Err = create_synthetic_environment(0.01, test_mthds; outliers_density=0.0, holes_density=0.2, update_init="all", initialize=false, init_method="gpsfm",  num_cams=10, noise_type="angular", update="order-random-update-all", set_anchor="fixed", max_iterations=100);
-# rad2deg.(mean.(eachcol(Err)))
+# test_mthds = ["gpsfm", "baseline sinha", "subspace_angular", "subspace", "skew_symmetric_vectorized"]
+# test_mthds = ["skew_symmetric_vectorized", "subspace", "subspace-svd", "subspace_angular",] ;
+# test_mthds = ["gpsfm", "skew_symmetric_vectorized", "subspace_angular", "l2_kkt" ] ;
+
+# Err = create_synthetic_environment(0.02, test_mthds; outliers_density=0.0,  holes_density=0.4, update_init="all", initialize=true, init_methods=["gpsfm"],  num_cams=25, noise_type="angular", update="order-random-update-all", set_anchor="fixed", max_iterations=100);
+# println(rad2deg.(mean.(eachcol(Err))))
+# println(mean.(eachcol(Err)))
 
 
 
-# folder_name = "MatFiles/nerf_bonsai"
-
-# file = MAT.matopen(folder_name*"/Adj.mat");
-# Adj = sparse(read(file, "A"))
-# close(file)
-# num_v = nv(Graph(Adj))
-# HD = 1 - ne(Graph(Adj))/(num_v*(num_v-1)/2)
-
-# match_file = MAT.matopen(folder_name*"/Matches.mat");
-# Matches = SparseMatrixCSC{Float64, Int64}(read(match_file, "M"));
-# close(match_file)
-
-# F_file = MAT.matopen(folder_name*"/Fs.mat");
-# F = read(F_file, "FN");
-# close(F_file)
-# F_multiview = cameras_from_F.wrap(F)
- 
-# Ps_file = MAT.matopen(folder_name*"/Ps.mat");
-# Ps_gt = read(Ps_file);
-# close(Ps_file)
-# Ps_gt = sort(Dict(parse(Int,string(k))=>v  for (k,v) in pairs(Ps_gt)));
-# Ps_gt = Cameras{Float64}(getindex.(Ref(Ps_gt), keys(Ps_gt)));
 
 
-# Ps_gpsfm_file = MAT.matopen(folder_name*"/Ps_gpsfm.mat");
-# Ps_gpsfm = read(Ps_gpsfm_file, "Ps_gpsfm");
-# close(Ps_gpsfm_file)
-# recovered_cameras_gpsfm = Cameras{Float64}([Camera{Float64}(Ps_gpsfm[i]) for i=1:size(Ps_gpsfm,1)]);
-
-# F_unwrap = unwrap(F_multiview_new);
-# recovered_cameras_gpsfm = Cameras{Float64}(MATLAB.mxcall(:runProjectiveSim, 0, F_unwrap, "gpsfm", Matches));
-# mean(rad2deg.(compute_error(Ps_gt, recovered_cameras_gpsfm, projective_synchronization.angular_distance)))
-# recovered_cameras = recover_cameras_iterative(F_multiview; X₀=recovered_cameras_gpsfm, method="subspace_angular",  update="order-centrality-update-all");
-# recovered_cameras, Wts = outer_irls(recover_cameras_iterative, F_multiview, recovered_cameras_gpsfm, "subspace_angular", compute_error, max_iter_init=15, inner_method_max_it=5, weight_function=projective_synchronization.cauchy , c=projective_synchronization.c_cauchy, max_iterations=15, δ=1e-3, δ_irls=1e-1 , update_init="all", update="order-weights-update-all", set_anchor="fixed");
-# mean(rad2deg.(compute_error(Ps_gt, recovered_cameras, projective_synchronization.angular_distance)))
 
 
-# if !check_if_all_nodes_in_triplets(Adj)
-    # any(degree(Graph(Adj)) .< 2)
+
+
+
+
+
+
+
+
+
+
+
+
+# # # # f_file = MAT.matopen("F_test.mat", "w")
+# # # # write(f_file, "F", F_unwrap)
+# # # # close(f_file) 
+
+# datasets = ["Dino 319","Dino 4983","Corridor", "House", "Gustav Vasa", "Folke Filbyter", "Park Gate", "Nijo", "Drinking Fountain", "Golden Statue", "Jonas Ahls", "De Guerre", "Dome", "Alcatraz Courtyard", "Alcatraz Water Tower", "Cherub", "Pumpkin", "Sphinx", "Toronto University", "Sri Thendayuthapani", "Porta san Donato", "Buddah Tooth", "Tsar Nikolai I", "Smolny Cathedral", "Skansen Kronan"];
+# folder_path = "/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/DataSet Proj/"
+
+# F, tracks, matches = get_data(folder_path, datasets[end-9]);
+# F_mv = copy(wrap(F))
+# Matches = spzeros(size(F_mv)...)
+# for i=1:size(F_mv,1)-1
+#     for j=i+1:size(F_mv,1)
+#         Matches[i,j] = copy(matches[i,j,1])
+#         Matches[j,i] = copy(matches[i,j,1])
+#     end
 # end
-
-
-# Adj_new = remove_fraction_edges(Matches; remove_frac=85, sample=false)
-# check_if_all_nodes_in_triplets(Adj_new)
-# tg, trips = get_triplet_cover(Adj_new; max_size=5000);
-# covered_nodes = unique(reduce(hcat,trips))
-# nonTriplet_cams = setdiff( collect(1:size(Adj,1)), covered_nodes)
-
-
-
-# issymmetric(Adj_new)
+# Adj_new = remove_fraction_edges(Matches; threshold=1012)
 # is_connected(Graph(Adj_new))
-# any(degree(Graph(Adj_new)) .< 2)
+# all(degree(Graph(Adj_new)) .>= 2) 
+# check_if_all_nodes_in_triplets(Adj_new)
 
+# tG, trips = get_triplet_cover(Adj_new; max_size=6000);
+# covered_nodes = unique(reduce(hcat,trips[tG[2][1:nv(tG[1])]]))
+# nonTriplet_cams = setdiff( collect(1:size(Adj_new,1)), covered_nodes)
 # C = rand(4,size(Adj_new,1))*100;
 # solvable = MATLAB.mxcall(:is_finite_solvable, 1, Matrix{Float64}(Adj_new), C, "eigs")
 
-# F_multiview_new = SparseMatrixCSC{FundMat{Float64}, Int64}(F_multiview .* Adj_new)
+# F_mv = SparseMatrixCSC{FundMat{Float64}, Int64}(F_mv .* Adj_new)
+# Matches = SparseMatrixCSC{Float64, Int64}(Matches .* Adj_new);
+
+# # # # F_multiview_gpsfm = F_mv;
+# F_multiview_gpsfm = copy(F_mv[1:end .∉ Ref(nonTriplet_cams), 1:end .∉ Ref(nonTriplet_cams)] )
+# F_unwrap = copy(unwrap(F_multiview_gpsfm));
+# Matches_gpsfm = copy(Matches[1:end .∉ Ref(nonTriplet_cams), 1:end .∉ Ref(nonTriplet_cams)])
+
+# tracks_cpy = zeros(size(tracks,1)-2*length(nonTriplet_cams), size(tracks,2))
+# j=1;
+# for i=1:size(tracks,1)
+#     if i in 2*nonTriplet_cams .- 1 || i in 2*nonTriplet_cams
+#         continue
+#     else
+#         tracks_cpy[j,:] = copy(tracks[i,:])
+#         j+=1 
+#     end
+# end
+
+# recovered_cameras_gpsfm, t, F, N = MATLAB.mxcall(:runProjective_direct, 4, unwrap(F_multiview_gpsfm), "gpsfm", Matches_gpsfm, tracks_cpy );
+# err = MATLAB.mxcall(:eval_from_julia, 1, recovered_cameras_gpsfm, tracks_cpy );
+
+# n = 65;
+# P_init = Vector{Camera{Float64}}(repeat([Camera_canonical], size(F_mv,1)));
+# P_init[covered_nodes] = recovered_cameras_gpsfm            
+# P_init[intersect(collect(1:n), unique(reduce(hcat,trips[tG[2][1:nv(tG[1])]])) ) ] = recovered_cameras_gpsfm            
+
+# # # for i =1:length(P_init)
+# #     # if isequal(P_init[i], Camera_canonical)
+# #         # continue
+# #     # end
+# #     # P_init[i] = inv(Ns[3*i-2:3*i, 3*i-2:3*i] )*P_init[i]
+# # # end
+
+# # # F_norm = Ns'*F*Ns;
+# # # F_mv_norm = copy(wrap(F_norm))
+# # # F_mv_norm = SparseMatrixCSC{FundMat{Float64}, Int64}(F_mv_norm .* Adj_new)
+ 
+
+# Ps , Wts = outer_irls(recover_cameras_iterative, F_mv, Cameras{Float64}(P_init), "subspace_angular", compute_error, max_iter_init=15, inner_method_max_it=5, weight_function=projective_synchronization.cauchy , c=projective_synchronization.c_cauchy, max_iterations=15, δ=1e-3, δ_irls=1e-1 , update_init="all", update="order-weights-update-all", set_anchor="fixed");
+
+# err = MATLAB.mxcall(:eval_from_julia, 1, [Matrix{Float64}(P) for (i,P) in enumerate(Ps) ], tracks );
+
+# # err = MATLAB.mxcall(:eval_from_julia, 1, [Matrix{Float64}(P) for P in Ps ][intersect(collect(1:n), unique(reduce(hcat,trips[tG[2  ][1:nv(tG[1])]])) )] , tracks_cpy );
 
 
-# recovered_cameras = recover_cameras_iterative(F_multiview_new; X₀=P_init, method="subspace_angular");
-# recovered_cameras, Wts = outer_irls(recover_cameras_iterative, F_multiview_new, P_init, "subspace_angular", compute_error, max_iter_init=50, error_measure=projective_synchronization.angular_distance, inner_method_max_it=5, weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy, max_iterations=50, δ_irls=1.0, update_init="all", update="order-weights-update-all",  set_anchor="fixed");
-
-
-
-# adj_mod_file = MAT.matopen(folder_name*"/Pruned_Adj.mat", "w")
-# write(adj_mod_file, "A", Adj_new)
-# close(adj_mod_file) 
-
-# F_unwrap = unwrap(F_multiview_new);
-# recovered_cameras_gpsfm = Cameras{Float64}(MATLAB.mxcall(:runProjectiveSim, 0, F_unwrap, "gpsfm", Matches));
-# mean(rad2deg.(compute_error(Ps_gt, recovered_cameras_gpsfm, projective_synchronization.angular_distance)))
-# recovered_cameras = recover_cameras_iterative(F_multiview; X₀=recovered_cameras_gpsfm, method="subspace_angular");
-# recovered_cameras, Wts = outer_irls(recover_cameras_iterative, F_multiview, recovered_cameras_gpsfm, "subspace_angular", compute_error, max_iter_init=15, inner_method_max_it=5, weight_function=projective_synchronization.huber , c=projective_synchronization.c_huber, max_iterations=15, δ=1e-3, δ_irls=1e-1 , update_init="all", update="order-weights-update-all", set_anchor="fixed");
-# mean(rad2deg.(compute_error(Ps_gt, recovered_cameras, projective_synchronization.angular_distance)))
-
-
-# f_file = MAT.matopen(folder_name*"/F_unwrapped.mat", "w")
-# write(f_file, "F", F_unwrap)
-# close(f_file) 
-
-
-# recovered_cameras_baseline_sinha = recover_cameras_baselines(F_multiview, "sinha");
-# mean(rad2deg.(compute_error(Ps_gt, recovered_cameras_baseline_sinha, projective_synchronization.angular_distance)))
-# recovered_cameras_baseline_colombo = recover_cameras_baselines(F_multiview_new, "colombo");
-# mean(rad2deg.(compute_error(Ps_gt, recovered_cameras_baseline_colombo, projective_synchronization.angular_distance)))

@@ -27,12 +27,13 @@ function recover_cameras_from_mat(F_filename::String, init_filename::String, nor
 
     # F_multiview = SparseArrays.SparseMatrixCSC{eltype(F_multiview), Integer}(F_multiview .* A)  
     # Ps = cameras_from_F.recover_cameras_iterative(F_multiview; X₀=P_init, method=method, update="order-weights-update-all", min_updates=1, δ=1e-3, set_anchor="fixed", max_iterations=50);
-    Ps, Wts = cameras_from_F.outer_irls(cameras_from_F.recover_cameras_iterative, F_multiview, P_init, method, cameras_from_F.compute_error, max_iter_init=15, inner_method_max_it=5, weight_function=projective_synchronization.cauchy , c=projective_synchronization.c_cauchy, max_iterations=15, δ=1e-3, δ_irls=1e-1 , update_init="all", update="order-weights-update-all", set_anchor="fixed");
-    
+    t = @elapsed Ps, Wts = cameras_from_F.outer_irls(cameras_from_F.recover_cameras_iterative, F_multiview, P_init, method, cameras_from_F.compute_error, max_iter_init=15, inner_method_max_it=5, weight_function=projective_synchronization.huber , c=projective_synchronization.c_huber, max_iterations=15, δ=1e-3, δ_irls=1e-1 , update_init="all", update="order-weights-update-all", set_anchor="fixed");
+
     Ps_mat = [N[3*i-2:3*i, 3*i-2:3*i]*Matrix(Ps[i]) for i=1:length(Ps) ];
     # Ps_mat = [Matrix(Ps[i]) for i=1:length(Ps) ];
 
     file = MAT.matopen(output_file, "w")
+    write(file,"time_f2c", t)
     write(file, "Ps_iterative", Ps_mat)
     close(file) 
 end
@@ -67,7 +68,7 @@ function mod_huber(r)
 end
 
 function main(args)
-    method = "baseline colombo"
+    method = "subspace_angular"
     F_file = args[1]
     ST_file = args[2]
     triplets_file = args[3]

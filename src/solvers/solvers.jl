@@ -15,6 +15,19 @@ function get_Nullspace_svd_subspace(A::AbstractMatrix{T};full=true, threshold=1e
     return A_svd.V[:, end-count(A_svd.S.<threshold)+1:end]
 end
 
+function get_Nullspace_l1(A::AbstractMatrix{T}) where T<:AbstractFloat
+    # m,n = size(A);
+    # f = SVector{2*m+n, T}([zeros(n,1);zeros(m,1);ones(m,1)]);
+    # A_ineq = vcat( hcat(zeros(m,n) , SMatrix{m,m,T}(I), -SMatrix{m,m,T}(I) ), hcat(zeros(m,n),-SMatrix{m,m,T}(I),-SMatrix{m,m,T}(I)) );
+    # b_ineq = zeros(2*m,1);
+    # A_eq = [ [-A ,SMatrix{m,m,T}(I),zeros(m,m)] ; [ones(1,n),zeros(1,m),zeros(1,m)] ];
+    # b_eq = [zeros(m,1);1];
+    # vX = linprog(f, A_ineq, b_ineq, A_eq, b_eq);
+    return MATLAB.mxcall(:SolveNSl1, 1, Matrix{Float64}(A));
+end
+    
+
+
 function make_skew_symmetric(x::SVector{3,T}) where T
    return SMatrix{3,3,T}([[0, x[3], -x[2]] [-x[3], 0, x[1]] [x[2], -x[1], 0 ]]) 
 end
@@ -147,7 +160,7 @@ function F_8ptNorm(x_homo::Pts2D_homo{T}, x′_homo::Pts2D_homo{T}) where T
     return F
 end
 
-function recover_camera_SkewSymm(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(length(Ps)), P₀=nothing; l1=false) where T<:AbstractFloat
+function recover_camera_SkewSymm(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(length(Ps)), P₀=nothing) where T<:AbstractFloat
     # Given Pᵢ, and Fᵢⱼ , find Pⱼ
     # PᵢᵀFᵢⱼPⱼ is skew symmetric
     num_cams = length(Ps)
@@ -169,11 +182,7 @@ function recover_camera_SkewSymm(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(lengt
         D[k*10+10,:] = @views sqrt_wᵢ*[z; z; A[4,1:3]; A[3,1:3]]
     end
 
-    if !l1
-        return Camera{T}(reshape(get_NullSpace_svd(D), 3, 4))
-    else
-        return Camera{T}(reshape(l1_nullspace_irls(D, 10, δ=1e-3), 3, 4))
-    end
+    return Camera{T}(reshape(get_NullSpace_svd(D), 3, 4))
 
 end
 
@@ -187,54 +196,6 @@ function recover_camera_SkewSymm_vectorization(Ps::Cameras{T}, Fs::FundMats{T}, 
         D[(i-1)*16+1:(i-1)*16+16, :] = √(wts[i])*Aᵢ
     end
     return Camera{T}(reshape(get_NullSpace_svd(D), 3, 4))
-end
-
-function recover_cameras_gradient_descent(Ps::Cameras{T}, Fs::FundMats{T}, wts = nothing, P₀=recover_camera_SkewSymm_vectorization(Ps, Fs); λ=10, max_iterations=100, δ=1e-4) where T
-    num_cams = length(Ps)
-    x = vec(P₀)
-
-    it = 0
-    As = Vector{SMatrix{16,12,Float64}}(undef,num_cams)
-    for i=1:num_cams
-        As[i] = ( kron( (Ps[i]'*Fs[i]') , I₄)*K₃₄) + (kron( I₄, Ps[i]'*Fs[i]' ))
-    end
-    
-    while it < max_iterations
-        x_prev = x
-        ∇ = zero(x_prev)
-        for i=1:num_cams
-            Aᵢ =  @views As[i]
-            if norm(Aᵢ*x_prev) > 1e-5
-                ∇ = ∇ + ((Aᵢ'*Aᵢ)*x_prev)/norm(Aᵢ*x_prev)
-            end
-        end
-        ct=0
-        while ct < 100
-            x = x_prev - λ*∇
-            # x = projective_synchronization.unit_normalize(x)
-            prev = 0
-            curr = 0
-            for i=1:num_cams
-                Aᵢ = @views As[i]
-                curr = curr + norm(Aᵢ*x)
-                prev = prev + norm(Aᵢ*x_prev)
-            end
-            if curr > prev
-                λ = λ/2
-            else
-                λ = λ*2
-                # println(prev,"\t",curr, "\t", l2_prev)
-                break
-            end
-            ct+=1
-        end
-        it +=1
-        if norm(x-x_prev)/norm(x_prev) < δ  
-            break
-        end
-    end
-    # println(it)
-    return x
 end
 
 function eq_constaint(x::AbstractVector{T}, N) where T<:AbstractFloat
@@ -253,13 +214,14 @@ function jacobian_constraints(x::AbstractVector{T}, N) where T<:AbstractFloat
     return -2*x
 end
 
+#=
 function linearized_lagrangian_optimizer(fᵢ, c, x₀::AbstractVector{T}, data::AbstractVector; wts=ones(length(data)), max_iterations=50, δ_tol=1e-6, δ_break=1e-6) where T<:AbstractFloat
     it = 0
     x_prev = copy(x₀)
     x̂ = missing
     n = length(x₀)    
     while it < max_iterations
-        A = -2*x_prev # change this from specific to common
+        A = -2*x_prev' # change this from specific to common
         B = zeros(n,n)
         D = zeros(n)
         for i=1:length(data)
@@ -277,15 +239,15 @@ function linearized_lagrangian_optimizer(fᵢ, c, x₀::AbstractVector{T}, data:
             break
         end
 
-        # B_svd = svd(B)
-        # d_inv = Matrix{Float64}(diagm(1 ./B_svd.S))
-        # d_inv[d_inv .> 1e12] .= 0
-        # B_inv = B_svd.V*d_inv*B_svd.U'
-        B_inv = pinv(B)
+        B_svd = svd(B)
+        d_inv = Matrix{Float64}(diagm(1 ./B_svd.S))
+        d_inv[d_inv .> 1e12] .= 0
+        B_inv = B_svd.V*d_inv*B_svd.U'
+        # B_inv = pinv(B)
         
         C = c(x_prev, data)
-        λ = (C - A'*B_inv*D)/(A'*B_inv*A)
-        dX = -B_inv*(D + λ*A)
+        λ = (C - A*B_inv*D)/(A*B_inv*A')
+        dX = -B_inv*(D + λ*A')
         x̂ = x_prev + dX
         it += 1
         if norm(x̂ - x_prev) < δ_break
@@ -299,6 +261,17 @@ end
 
 function recover_camera_subspace(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(length(Ps)), P₀=recover_camera_SkewSymm_vectorization(Ps,Fs, wts); max_iterations=100, δ=1e-6) where T<:AbstractFloat    
     return linearized_lagrangian_optimizer(subspace_obj_i, eq_constaint, vec(P₀), [nullspace( kron( (Ps[i]'*Fs[i]') , I₄)*K₃₄ + kron( I₄, Ps[i]'*Fs[i]' ) ) for i=1:length(Ps)]; wts=wts, max_iterations=max_iterations, δ_break=δ)
+end
+=#
+
+function recover_camera_subspace_svd(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(length(Ps)), P₀=nothing) where T<:AbstractFloat
+    n = length(Ps)
+    D = zeros(12*n,12)
+    for i=1:length(Ps)
+        N = nullspace( kron( (Ps[i]'*Fs[i]') , I₄)*K₃₄ + kron( I₄, Ps[i]'*Fs[i]' ) )
+        D[(i-1)*12+1:i*12,:] = √wts[i]*(SMatrix{12,12,T}(I) - N*N')
+    end
+    return get_NullSpace_svd(D)
 end
 
 function recover_camera_subspace_angular(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(length(Ps)), P₀=recover_camera_SkewSymm_vectorization(Ps,Fs,wts);) where T<:AbstractFloat
@@ -314,10 +287,11 @@ function subspace_angular_distance(N::AbstractVector, c₀::AbstractVector{T}; w
         c_prev = c
         c = SVector{length(c_prev)}(zero(c_prev))
         for i in collect(1:length(N))
-            var1 = N[i]*N[i]'*c_prev 
-            var2 = (c_prev'*var1 )
-            if var2 < 1
-                c = c + wts[i]*((var1)/ sqrt( 1 - var2^2))
+            B = N[i]*N[i]';
+            Bc = B*c_prev;
+            if ((c_prev'*Bc)/norm(Bc)) < 1
+                var = (2*Bc*norm(Bc) - ((c_prev'*Bc)*((B'*Bc)/norm(Bc))) )/(norm(Bc)^2)
+                c = c + wts[i]* ((1/√(1 - ((c_prev'*Bc)/norm(Bc))^2))*var)
             end
         end            
         if iszero(c)
@@ -330,4 +304,103 @@ function subspace_angular_distance(N::AbstractVector, c₀::AbstractVector{T}; w
         end
     end
     return c
+end
+
+function recover_camera_l2_unitSum(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(length(Ps)), P₀=nothing) where T<:AbstractFloat
+    num_cams = length(Ps)
+    D = zeros(16*num_cams, 12)
+    for i=1:num_cams
+        Aᵢ = ( kron( (Ps[i]'*Fs[i]') , I₄)*K₃₄) + (kron( I₄, Ps[i]'*Fs[i]' ))
+        # D[(i-1)*16+1:(i-1)*16+16, :] = (√wts[i])*Aᵢ
+        D[(i-1)*16+1:(i-1)*16+16, :] = (wts[i])*Aᵢ #Works empirically better without sqrt. Why?
+    end
+
+    DataMat = [ [D'*D  ones(length(Ps[1]),1)];[ones(1,length(Ps[1])) 0] ]
+    obs_vec = [ones(length(Ps[1]),1);1]
+    res = DataMat \ obs_vec
+
+    return Camera{T}(reshape(res[1:end-1],3,4))
+end
+
+
+function recover_camera_l1(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(length(Ps)), P₀=nothing;) where T<:AbstractFloat
+    # Given Pᵢ, and Fᵢⱼ , find Pⱼ
+    num_cams = length(Ps)
+    D = zeros(16*num_cams, 12)
+    for i=1:num_cams
+        Aᵢ = ( kron( (Ps[i]'*Fs[i]') , I₄)*K₃₄) + (kron( I₄, Ps[i]'*Fs[i]' ))
+        D[(i-1)*16+1:(i-1)*16+16, :] = (wts[i])*Aᵢ
+    end
+
+    ns_opt =MATLAB.mxcall(:SolveNSl1, 1, Matrix{Float64}(D));
+    projective_synchronization.unit_normalize!(ns_opt);
+    return Camera{T}(reshape(ns_opt, 3, 4))
+end
+    
+
+function split(Adj::AbstractSparseMatrix; num_partitions=round(size(Adj,1)/25))
+    clusters = MATLAB.mat"spectralcluster($Adj, $num_partitions)";
+    partitions = Vector{SparseMatrixCSC}(undef, Int(num_partitions));
+    for (i,el) in enumerate(unique(clusters))
+        g = findall(clusters .== el)
+        G = induced_subgraph(Graph(Adj), g);
+        A = adjacency_matrix(G[1]);
+        # tG, t = get_triplet_cover(A, max_size=5000)
+        # covered_nodes = unique(reduce(hcat,t[tG[2][1:nv(tG[1])]]))
+        # nonTriplet_cams = setdiff( collect(1:size(A,1)), covered_nodes)
+        C = rand(4,size(A,1))*100;
+        println("Checking solvability")
+        solvable = MATLAB.mxcall(:is_finite_solvable, 1, Matrix{Float64}(A), C, "eigs")
+        if solvable
+            partitions[i] = A
+        else
+            partitions[i] = spzeros(1,1)
+        end
+    end
+    return partitions
+end
+
+
+function split_and_solve(Adj::AbstractSparseMatrix, F_multiview::AbstractSparseMatrix, Matches::AbstractSparseMatrix, Ps_gt::Cameras{Float64}; partitions=round(size(Adj,1)/25))
+    clusters = MATLAB.mat"spectralcluster($Adj, $partitions)";
+    println("Got clusters")
+    nodes = 1:size(Adj,1);
+    errs_gpsfm = Vector{Float64}(undef, Int(partitions))
+    errs_ours = Vector{Float64}(undef, Int(partitions))
+    for el in unique(clusters)
+        g = findall(clusters .== el)
+        G = induced_subgraph(Graph(Adj), g);
+        A = adjacency_matrix(G[1]);
+        # tG, t = get_triplet_cover(A, max_size=5000)
+        # covered_nodes = unique(reduce(hcat,t[tG[2][1:nv(tG[1])]]))
+        # nonTriplet_cams = setdiff( collect(1:size(A,1)), covered_nodes)
+        println(size(A,1))
+        if length(nonTriplet_cams) > 0
+            C = rand(4,size(A,1))*100;
+            println("Checking solvability")
+            solvable = MATLAB.mxcall(:is_finite_solvable, 1, Matrix{Float64}(A), C, "eigs")
+            if !solvable
+                return false
+            end
+        end
+            
+        F = F_multiview[nodes .∈ Ref(g), nodes .∈ Ref(g)]
+        M = Matches[nodes .∈ Ref(g), nodes .∈ Ref(g)]
+
+        F_gpsfm = F[1:end .∉ Ref(nonTriplet_cams), 1:end .∉ Ref(nonTriplet_cams)]
+        M_gpsfm = M[1:end .∉ Ref(nonTriplet_cams), 1:end .∉ Ref(nonTriplet_cams)]
+        F_unwrap = unwrap(F_gpsfm);
+        println("Running GPSFM")
+        P_gpsfm = Cameras{Float64}(MATLAB.mxcall(:runProjective_direct, 1, F_unwrap, "gpsfm", M_gpsfm));
+        println("GPSFM done")
+        errs_gpsfm[Int(el)] = mean(rad2deg.(compute_error(Ps_gt[g], P_gpsfm, projective_synchronization.angular_distance)))
+        
+        P_init = Vector{Camera{Float64}}(repeat([Camera_canonical], size(A,1)))
+        P_init[intersect(collect(1:size(A,1)), unique(reduce(hcat,t[tG[2][1:nv(tG[1])]])) )] = P_gpsfm            
+
+        P_ours = recover_cameras_iterative(F; X₀=P_init, method="subspace_angular",  update="order-centrality-update-all");
+        # P_ours, Wts = outer_irls(recover_cameras_iterative, F, P_init, "subspace_angular", compute_error, max_iter_init=15, inner_method_max_it=5, weight_function=projective_synchronization.cauchy , c=projective_synchronization.c_cauchy, max_iterations=15, δ=1e-3, δ_irls=1e-1 , update_init="all", update="order-weights-update-all", set_anchor="fixed");
+        errs_ours[Int(el)] = mean(rad2deg.(compute_error(Ps_gt[g], P_ours, projective_synchronization.angular_distance)))
+    end
+    return errs_gpsfm, errs_ours
 end
