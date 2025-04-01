@@ -52,77 +52,13 @@ function relative_projectivity( Ps::Cameras{T}, Qs::Cameras{T} ) where T<:Abstra
         L = vcat(L, (a'*a*SMatrix{12,12,T}(I) - a*a') * kron(SMatrix{4,4,T}(I),Ps[k]) )
     end
     L = L[2:end,:]
+    println(size(L), rank(L))
     L_svd = svd(L)
     H = SMatrix{4,4,T}(reshape( L_svd.V[:,end], 4 , 4))
     
     return H
 end
-
-function relative_projectivity_sphere(Ps::Cameras{T}, Qs::Cameras{T}) where T<:AbstractFloat
-    num_cams = length(Ps)
-    L = zeros(16, num_cams)
-
-    for i=1:num_cams
-        L[:,i] = kron(SMatrix{4,4,T}(I), Ps[i]')*vec(Qs[i])
-    end
-    for j=2:size(L,2)
-        if dot(view(L,:,1),view(L,:,j)) < 0
-            L[:,j] = -L[:,j]
-        end
-    end
-
-    c = projective_synchronization.spherical_mean(L)
-    return SMatrix{4,4,T}(reshape(c, 4, 4))
-end
     
-function relative_projectivity_analytic(Ps::Cameras{T}, Qs::Cameras{T}) where T<:AbstractFloat
-    num_cams = length(Ps)
-    D = zeros(12*num_cams,16+num_cams)
-    z = zeros(4)
-    for i=1:num_cams
-        k=i-1   
-
-        D[k*12+1, 1:16] = [ Ps[i][1,:]; z; z; z]
-        D[k*12+1, 16+i] = -Qs[i][1,1]
-
-        D[k*12+2, 1:16] = [ z; Ps[i][1,:]; z; z]
-        D[k*12+2, 16+i] = -Qs[i][1,2]
-
-        D[k*12+3, 1:16] = [ z; z; Ps[i][1,:]; z]
-        D[k*12+3, 16+i] = -Qs[i][1,3]
-
-        D[k*12+4, 1:16] = [ z; z; z; Ps[i][1,:]]
-        D[k*12+4, 16+i] = -Qs[i][1,4]
-
-        D[k*12+5, 1:16] = [ Ps[i][2,:]; z; z; z]
-        D[k*12+5, 16+i] = -Qs[i][2,1]
-
-        D[k*12+6, 1:16] = [ z; Ps[i][2,:]; z; z]
-        D[k*12+6, 16+i] = -Qs[i][2,2]
-        
-        D[k*12+7, 1:16] = [ z; z; Ps[i][2,:]; z]
-        D[k*12+7, 16+i] = -Qs[i][2,3]
-
-        D[k*12+8, 1:16] = [ z; z; z; Ps[i][2,:]]
-        D[k*12+8, 16+i] = -Qs[i][2,4]
-
-        D[k*12+9, 1:16] = [Ps[i][3,:]; z; z; z]
-        D[k*12+9, 16+i] = -Qs[i][3,1]
-
-        D[k*12+10, 1:16] = [ z; Ps[i][3,:]; z; z]
-        D[k*12+10, 16+i] = -Qs[i][3,2]
-
-        D[k*12+11, 1:16] = [ z; z; Ps[i][3,:]; z]
-        D[k*12+11, 16+i] = -Qs[i][3,3]
-
-        D[k*12+12, 1:16] = [ z; z; z; Ps[i][3,:]]
-        D[k*12+12, 16+i] = -Qs[i][3,4]
-    end
-    D_svd = svd(D, full=true)
-    H = SMatrix{4,4,T}(reshape(D_svd.V[1:16, end], 4, 4)) #  Last column of V is solution for null space problem
-    return H
-end
-
 function F_8pt(x::Pts2D_homo{T}, x′::Pts2D_homo{T}) where T
     F_8pt(euclideanize.(x), euclideanize.(x′))
 end
@@ -214,56 +150,6 @@ function jacobian_constraints(x::AbstractVector{T}, N) where T<:AbstractFloat
     return -2*x
 end
 
-#=
-function linearized_lagrangian_optimizer(fᵢ, c, x₀::AbstractVector{T}, data::AbstractVector; wts=ones(length(data)), max_iterations=50, δ_tol=1e-6, δ_break=1e-6) where T<:AbstractFloat
-    it = 0
-    x_prev = copy(x₀)
-    x̂ = missing
-    n = length(x₀)    
-    while it < max_iterations
-        A = -2*x_prev' # change this from specific to common
-        B = zeros(n,n)
-        D = zeros(n)
-        for i=1:length(data)
-            obj_i = fᵢ(x_prev, data[i])
-            if norm(obj_i) < δ_tol
-                continue
-            end
-            # Jᵢ = ForwardDiff.jacobian(x̂ -> fᵢ(x̂, data[i]), x_prev)
-            Jᵢ = jacobian_fi(x_prev, data[i])
-            B = B + wts[i]*Jᵢ'*Jᵢ
-            D = D + wts[i]*Jᵢ'*obj_i
-        end
-        if all(B .< δ_tol)
-            x̂ = x_prev
-            break
-        end
-
-        B_svd = svd(B)
-        d_inv = Matrix{Float64}(diagm(1 ./B_svd.S))
-        d_inv[d_inv .> 1e12] .= 0
-        B_inv = B_svd.V*d_inv*B_svd.U'
-        # B_inv = pinv(B)
-        
-        C = c(x_prev, data)
-        λ = (C - A*B_inv*D)/(A*B_inv*A')
-        dX = -B_inv*(D + λ*A')
-        x̂ = x_prev + dX
-        it += 1
-        if norm(x̂ - x_prev) < δ_break
-            break
-        end
-        x_prev = copy(x̂)
-    end
-    # println(it)
-    return x̂
-end
-
-function recover_camera_subspace(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(length(Ps)), P₀=recover_camera_SkewSymm_vectorization(Ps,Fs, wts); max_iterations=100, δ=1e-6) where T<:AbstractFloat    
-    return linearized_lagrangian_optimizer(subspace_obj_i, eq_constaint, vec(P₀), [nullspace( kron( (Ps[i]'*Fs[i]') , I₄)*K₃₄ + kron( I₄, Ps[i]'*Fs[i]' ) ) for i=1:length(Ps)]; wts=wts, max_iterations=max_iterations, δ_break=δ)
-end
-=#
-
 function recover_camera_subspace_svd(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(length(Ps)), P₀=nothing) where T<:AbstractFloat
     n = length(Ps)
     D = zeros(12*n,12)
@@ -275,6 +161,7 @@ function recover_camera_subspace_svd(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(l
 end
 
 function recover_camera_subspace_angular(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(length(Ps)), P₀=recover_camera_SkewSymm_vectorization(Ps,Fs,wts);) where T<:AbstractFloat
+    # return P₀/norm(P₀)
     return subspace_angular_distance([nullspace( kron( (Ps[i]'*Fs[i]') , I₄)*K₃₄ + kron( I₄, Ps[i]'*Fs[i]' ) ) for i=1:length(Ps)], Vector{T}(vec(P₀)); wts=wts)
 end
 
@@ -290,16 +177,18 @@ function subspace_angular_distance(N::AbstractVector, c₀::AbstractVector{T}; w
             B = N[i]*N[i]';
             Bc = B*c_prev;
             if ((c_prev'*Bc)/norm(Bc)) < 1
-                var = (2*Bc*norm(Bc) - ((c_prev'*Bc)*((B'*Bc)/norm(Bc))) )/(norm(Bc)^2)
-                c = c + wts[i]* ((1/√(1 - ((c_prev'*Bc)/norm(Bc))^2))*var)
+                # var = (2*Bc*norm(Bc) - ((c_prev'*Bc)*((B'*Bc)/norm(Bc))) )/(norm(Bc)^2)
+                # c = c + wts[i]* ((1/√(1 - ((c_prev'*Bc)/norm(Bc))^2))*var)
+                c = c + wts[i]* ( ( 2*norm(Bc)^2*(Bc)  - (c_prev'*Bc)*(B'*Bc)) / ( norm(Bc)^4*√(norm(Bc)^2 - (c_prev'*Bc)^2 ) ) )
             end
-        end            
+        end           
         if iszero(c)
             return c_prev
         end
         c = projective_synchronization.unit_normalize(c)
         it += 1
-        if norm(c-c_prev) < δ 
+        # if norm(c-c_prev) < δ 
+        if projective_synchronization.angular_distance(c,c_prev) < δ 
             break
         end
     end
@@ -323,7 +212,7 @@ function recover_camera_l2_unitSum(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(len
 end
 
 
-function recover_camera_l1(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(length(Ps)), P₀=nothing;) where T<:AbstractFloat
+function recover_camera_l1_UnitSum(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(length(Ps)), P₀=nothing;) where T<:AbstractFloat
     # Given Pᵢ, and Fᵢⱼ , find Pⱼ
     num_cams = length(Ps)
     D = zeros(16*num_cams, 12)
@@ -337,6 +226,37 @@ function recover_camera_l1(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(length(Ps))
     return Camera{T}(reshape(ns_opt, 3, 4))
 end
     
+function recover_camera_l1_unitNorm_CvxCcv(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(length(Ps)), P₀=recover_camera_SkewSymm_vectorization(Ps,Fs,wts);δ=1e-3, max_iterations=5) where T<:AbstractFloat
+    num_cams = length(Ps)
+    D = zeros(16*num_cams, 12)
+    for i=1:num_cams
+        Aᵢ = ( kron( (Ps[i]'*Fs[i]') , I₄)*K₃₄) + (kron( I₄, Ps[i]'*Fs[i]' ))
+        D[(i-1)*16+1:(i-1)*16+16, :] = (wts[i])*Aᵢ
+    end
+    x₀ = vec(P₀)
+    # x_curr = missing
+    x_prev = projective_synchronization.unit_normalize(x₀)
+    it=0
+    # while it <= max_iterations 
+        # x = Convex.Variable(length(vec(Ps[1])))
+        # problem = Convex.minimize(Convex.norm(D*x,1), [ Convex.norm(x) - 1 <= 0, (1 - (x_prev/norm(x_prev))'*x) <= 0 ])
+        # Convex.solve!(problem, SCS.Optimizer; silent=true)
+        # println(problem.status)
+        # x_curr = MATLAB.mxcall(:SolveConeProg_CvxCcv, 1, Matrix{Float64}(D), Vector{Float64}(x_prev));
+        # x_curr = reshape(x_curr,12)
+        # if ( norm(x_prev - (x_curr/norm(x_curr)) ) <= δ )
+            # break
+        # end
+        # x_prev = projective_synchronization.unit_normalize(x_curr)
+        # it += 1
+    # end
+    # x_opt = x_curr;
+
+    x_opt = MATLAB.mxcall(:SolveConeProg_CvxCcv2, 1, Matrix{Float64}(D), Vector{Float64}(x_prev), max_iterations, δ);
+
+    return Camera{T}(reshape(x_opt, 3, 4))
+
+end
 
 function split(Adj::AbstractSparseMatrix; num_partitions=round(size(Adj,1)/25))
     clusters = MATLAB.mat"spectralcluster($Adj, $num_partitions)";

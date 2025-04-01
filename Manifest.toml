@@ -305,12 +305,6 @@ weakdeps = ["StaticArrays"]
     [deps.ForwardDiff.extensions]
     ForwardDiffStaticArraysExt = "StaticArrays"
 
-[[deps.GPUArraysCore]]
-deps = ["Adapt"]
-git-tree-sha1 = "ec632f177c0d990e64d955ccc1b8c04c485a0950"
-uuid = "46192b85-c4d5-4398-a991-12ede77f4527"
-version = "0.1.6"
-
 [[deps.GraphPlot]]
 deps = ["ArnoldiMethod", "Colors", "Compose", "DelimitedFiles", "Graphs", "LinearAlgebra", "Random", "SparseArrays"]
 git-tree-sha1 = "f76a7a0f10af6ce7f227b7a921bfe351f628ed45"
@@ -420,10 +414,10 @@ uuid = "aa1ae85d-cabe-5617-a682-6adf51b2e16a"
 version = "0.9.36"
 
 [[deps.KrylovKit]]
-deps = ["GPUArraysCore", "LinearAlgebra", "PackageExtensionCompat", "Printf", "VectorInterface"]
-git-tree-sha1 = "3c2a016489c38f35160a246c91a3f3353c47bb68"
+deps = ["LinearAlgebra", "PackageExtensionCompat", "Printf", "Random", "VectorInterface"]
+git-tree-sha1 = "38477816f8db29956ea591feb3086d9edabf6f38"
 uuid = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
-version = "0.8.1"
+version = "0.9.5"
 
     [deps.KrylovKit.extensions]
     KrylovKitChainRulesCoreExt = "ChainRulesCore"
@@ -914,13 +908,18 @@ deps = ["ConstructionBase", "DataAPI", "Tables"]
 git-tree-sha1 = "f4dc295e983502292c4c3f951dbb4e985e35b3be"
 uuid = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
 version = "0.6.18"
-weakdeps = ["Adapt", "GPUArraysCore", "SparseArrays", "StaticArrays"]
 
     [deps.StructArrays.extensions]
     StructArraysAdaptExt = "Adapt"
     StructArraysGPUArraysCoreExt = "GPUArraysCore"
     StructArraysSparseArraysExt = "SparseArrays"
     StructArraysStaticArraysExt = "StaticArrays"
+
+    [deps.StructArrays.weakdeps]
+    Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
+    GPUArraysCore = "46192b85-c4d5-4398-a991-12ede77f4527"
+    SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+    StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [[deps.StructTypes]]
 deps = ["Dates", "UUIDs"]
@@ -990,9 +989,9 @@ version = "1.11.0"
 
 [[deps.VectorInterface]]
 deps = ["LinearAlgebra"]
-git-tree-sha1 = "7aff7d62bffad9bba9928eb6ab55226b32a351eb"
+git-tree-sha1 = "9166406dedd38c111a6574e9814be83d267f8aec"
 uuid = "409d34a3-91d5-4945-b6ec-7529ddf182d8"
-version = "0.4.6"
+version = "0.5.0"
 
 [[deps.Zlib_jll]]
 deps = ["Libdl"]
@@ -1021,8 +1020,8 @@ uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
 version = "17.4.0+2"
 
 [[deps.projective_synchronization]]
-deps = ["Arpack", "BenchmarkTools", "Distributions", "Graphs", "KrylovKit", "LinearAlgebra", "MAT", "ProgressBars", "Random", "Revise", "SparseArrays", "StaticArrays", "Statistics", "StatsBase", "StructArrays", "TiledIteration"]
-git-tree-sha1 = "eb11ef5abfcb1d5b3a681d00130713c073ed920c"
+deps = ["Arpack", "BenchmarkTools", "Distributions", "Graphs", "KrylovKit", "LinearAlgebra", "MAT", "MATLAB", "ProgressBars", "Random", "Revise", "SparseArrays", "StaticArrays", "Statistics", "StatsBase", "StructArrays", "TiledIteration"]
+git-tree-sha1 = "23e88c73890a476e422ee08040d150c853a96f66"
 repo-rev = "main"
 repo-url = "/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/projective_synchronization.jl"
 uuid = "804a50dd-d364-4a40-8def-afc57beda7bf"

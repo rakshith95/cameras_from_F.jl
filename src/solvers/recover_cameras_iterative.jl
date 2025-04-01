@@ -14,8 +14,6 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothi
     if occursin("skew_symm", lowercase(method))
         if occursin("vectorized", lowercase(method))
             avg = recover_camera_SkewSymm_vectorization
-        elseif occursin("l1", lowercase(method))
-            avg(Ps,Fs,wts) = recover_camera_SkewSymm(Ps,Fs,wts; l1=true)
         else
             avg = recover_camera_SkewSymm
         end
@@ -28,7 +26,7 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothi
             avg = recover_camera_subspace_svd
         end
     elseif occursin("l1", lowercase(method))
-        avg = recover_camera_l1
+        avg = recover_camera_l1_unitNorm_CvxCcv
     elseif occursin("l2_kkt", lowercase(method))
         avg = recover_camera_l2_unitSum
     end
@@ -76,6 +74,7 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothi
     end
 
     C = eigenvector_centrality(G)
+    # C = degree_centrality(G)
     # C = closeness_centrality(G)
 
     if occursin("nothing", set_anchor) || occursin("none", set_anchor)
@@ -104,11 +103,13 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothi
         elseif occursin("rand", lowercase(update_method))
             Random.shuffle!(nodes)
         elseif occursin("weights", lowercase(update_method))
-            nodes = sortperm( [ prod(weights[j,Ne[j]])*C[j] for j=1:num_cams], rev=true)
+            # nodes = sortperm( [ prod(weights[j,Ne[j]])*C[j] for j=1:num_cams], rev=true)
+            nodes = sortperm( [ prod(weights[j,Ne[j]]) for j=1:num_cams], rev=true)
         end
     end
 
     iter = 0
+    # println(anchor, "\t", nodes)
 
     exit_loop = false
     while !exit_loop
@@ -169,6 +170,6 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothi
         iter += 1
     end
     # println("\n\n")
-    # println(iter)
+    println(iter)
     return Cameras{Float64}(Ps)
 end

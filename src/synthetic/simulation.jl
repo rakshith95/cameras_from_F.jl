@@ -119,7 +119,7 @@ function noise_cameras( σ::T, Ps::Cameras{T}) where T<:AbstractFloat
     return Cameras{T}([ Camera{T}(reshape(projective_synchronization.rotate_vector(vec(Ps[i]), θ) , 3, 4)) for i=1:length(Ps) ])
 end
 
-function noise_F_from_points(σ, P₁::Camera{T}, P₂::Camera{T}, resolution=(1280,720)) where T<:AbstractFloat
+function noise_F_from_points(σ, P₁::Camera{T}, P₂::Camera{T}, resolution=(1280,720); normalize=false) where T<:AbstractFloat
     # Think about how best  to do this
     X = Pts3D{Float64}([rand(3),rand(3),rand(3),rand(3),rand(3),rand(3),rand(3),rand(3)])
     X_homo = homogenize.(X)
@@ -131,28 +131,47 @@ function noise_F_from_points(σ, P₁::Camera{T}, P₂::Camera{T}, resolution=(1
     x₂_homo = Pts2D_homo{Float64}([s₂*P₂*X_homo[i] + rand(Distributions.Normal(0, σ), 3) for i=1:length(X)])
 
     F = F_8ptNorm(x₁_homo, x₂_homo)
-    return F
+    if normalize
+        return F/norm(F)
+    else
+        return F
+    end
 end
 
 
-function noise_F_gaussian(σ, P₁::Camera{T}, P₂::Camera{T}) where T<:AbstractFloat
+function noise_F_gaussian(σ, P₁::Camera{T}, P₂::Camera{T}; normalize=true) where T<:AbstractFloat
     F = F_from_cams(P₁, P₂)
     F_noised = F + rand(Distributions.Normal(0,σ), 3, 3) 
     # rank-2 approximation
     F_noisy_svd = svd(F_noised)
     F_noisy = FundMat{T}(F_noisy_svd.U*diagm([F_noisy_svd.S[1:2];0.0])*F_noisy_svd.Vt)
-    return F_noisy/norm(F_noisy)
+    if normalize
+        return F_noisy/norm(F_noisy)
+    else
+        return F_noisy
+    end
 end
     
 
-function  noise_F_angular(σ::T, P₁::Camera{T}, P₂::Camera{T}) where T<:AbstractFloat
+function  noise_F_angular(σ::T, P₁::Camera{T}, P₂::Camera{T}; normalize=true) where T<:AbstractFloat
     F = F_from_cams(P₁, P₂)
     θ = abs(rand(Distributions.Normal(0,σ)))
+    if iszero(θ)
+        if normalize
+            return F/norm(F)
+        else
+            return F
+        end
+    end    
     F_noisy = FundMat{T}(reshape(projective_synchronization.rotate_vector(vec(F), θ), 3, 3))
     #Rank 2 approximation
     F_noisy_svd = svd(F_noisy)
     F_noisy = FundMat{T}(F_noisy_svd.U*diagm([F_noisy_svd.S[1:2];0.0])*F_noisy_svd.Vt)
-    return F_noisy/norm(F_noisy)
+    if normalize
+        return F_noisy/norm(F_noisy)
+    else
+        return F_noisy
+    end
 end
 
 function create_cameras!(cameras::Cameras, normalize)
@@ -196,7 +215,7 @@ function compute_error(GT_cameras::Cameras{T}, Recovered_cameras::Cameras{T}, er
     return [error(vec(Ps_transformed[i]), vec(GT_cameras[i])) for i=1:length(Recovered_cameras) ]
 end
 
-function compute_multiviewF_from_cams!(σ, F_multiview::AbstractSparseMatrix, cams::Cameras{T}; noise_type="angular") where T<:AbstractFloat
+function compute_multiviewF_from_cams!(σ, F_multiview::AbstractSparseMatrix, cams::Cameras{T}; noise_type="angular", normalize=true) where T<:AbstractFloat
     n = length(cams)
     for i=1:n
         for j=1:i 
@@ -207,12 +226,12 @@ function compute_multiviewF_from_cams!(σ, F_multiview::AbstractSparseMatrix, ca
                 if isequal(cams[j],Camera_canonical) && isequal(cams[i], Camera_canonical)
                     F_multiview[i,j] = FundMat{T}(zeros(3,3))
                 else
-                    F_multiview[i,j] = noise_F_angular(σ, cams[j], cams[i])
+                    F_multiview[i,j] = noise_F_angular(σ, cams[j], cams[i]; normalize=normalize)
                 end
             elseif occursin("points", noise_type)
-                F_multiview[i,j] = noise_F_from_points(σ, cams[j], cams[i])
+                F_multiview[i,j] = noise_F_from_points(σ, cams[j], cams[i]; normalize=normalize)
             elseif occursin("gaussian", noise_type)
-                F_multiview[i,j] = noise_F_gaussian(σ, cams[j], cams[i])
+                F_multiview[i,j] = noise_F_gaussian(σ, cams[j], cams[i]; normalize=normalize)
             end
             F_multiview[j,i] = F_multiview[i,j]'
         end
@@ -352,11 +371,16 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
             Wts = nothing
             for (ct,method) in enumerate(methods)
                 if occursin("synch", lowercase(method))
-                    synch_results = MATLAB.mxcall(:runProjectiveSim, 2, F_unwrap, "synch")
-                    recovered_cameras_synch = Cameras{Float64}(synch_results[1]);
+                    # synch_results = MATLAB.mxcall(:runProjectiveSim, 2, F_unwrap, "synch")
+                    matches = ones(div(size(F_unwrap,1),3), div(size(F_unwrap,1),3))
+
+                    tSynch = @elapsed recovered_cameras_synch, tS = projective_synchronization.matlab_interface(F_unwrap, matches, []; sim=true);
+                    # recovered_cameras_synch = Cameras{Float64}(synch_results[1]);
+                    recovered_cameras_synch = Cameras{Float64}( [ recovered_cameras_synch[i] for i =1:size(recovered_cameras_synch,2) ]    );
                     err = compute_error(gt_cameras[1:n .∉ Ref(nonTriplet_cams)], recovered_cameras_synch, error);
                     errs =  hcat(errs,[err;ones(length(nonTriplet_cams))*mean(err)] );
-                    times[ct] = synch_results[2]
+                    # times[ct] = synch_results[2]
+                    times[ct] = tSynch
                     recovered_cams[ct] = recovered_cams_trips
                 elseif occursin("gpsfm", lowercase(method)) 
                     if init && any(occursin.("gpsfm", lowercase.(init_methods)) )
@@ -378,8 +402,8 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
                 elseif occursin("baseline", lowercase(method))
                     if occursin("colombo", lowercase(method))
                         if length(nonTriplet_cams) < 1
-                            times[ct] = @elapsed recovered_cameras_colombo = recover_cameras_baselines(F_multiview_gpsfm, "colombo"; triplet_cover=(tG,t))
-                            times[ct] += trips_time
+                            t_colombo = @elapsed recovered_cameras_colombo = recover_cameras_baselines(F_multiview_gpsfm, "colombo"; triplet_cover=(tG,t))
+                            times[ct] = t_colombo + trips_time
                         else
                             times[ct] = @elapsed recovered_cameras_colombo = recover_cameras_baselines(F_multiview_gpsfm, "colombo")
                         end
@@ -431,105 +455,75 @@ end
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Recovering Cameras/finite-solvability')"
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Recovering Cameras/finite-solvability/Finite_solvability')"
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/GPSFM')"
-# # MATLAB.mat"addpath('/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/GPSFM/3rdparty/fromPPSFM/')"
+# MATLAB.mat"addpath('/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/GPSFM/3rdparty/fromPPSFM/')"
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/GPSFM/3rdparty/vgg_code/')"
  
 # test_mthds = ["gpsfm", "baseline sinha", "subspace_angular", "subspace", "skew_symmetric_vectorized"]
 # test_mthds = ["skew_symmetric_vectorized", "subspace", "subspace-svd", "subspace_angular",] ;
 # test_mthds = ["gpsfm", "skew_symmetric_vectorized", "subspace_angular", "l2_kkt" ] ;
 
-# Err = create_synthetic_environment(0.02, test_mthds; outliers_density=0.0,  holes_density=0.4, update_init="all", initialize=true, init_methods=["gpsfm"],  num_cams=25, noise_type="angular", update="order-random-update-all", set_anchor="fixed", max_iterations=100);
+# test_mthds = ["skew_symmetric_vectorized"]
+# Err = create_synthetic_environment(0.0, test_mthds; outliers_density=0.0, holes_density=0.4, update_init="none", initialize=false, init_methods=[""], num_cams=25, noise_type="angular", update="order-random-update-all", set_anchor="fixed", max_iterations=20);
 # println(rad2deg.(mean.(eachcol(Err))))
-# println(mean.(eachcol(Err)))
+
+# gt_cameras = Cameras{Float64}(repeat([Camera(zeros(3,4))], 4));
+# create_cameras!(gt_cameras, true);
+# F_multiview = SparseMatrixCSC{FundMat{Float64}, Int64}(repeat([FundMat(zeros(3,3))],4,4)) ;
+# compute_multiviewF_from_cams!(0.0, F_multiview, gt_cameras; normalize=false);
+# F = unwrap(F_multiview);
+
+
+# F_multiview2 = SparseMatrixCSC{FundMat{Float64}, Int64}(repeat([FundMat(zeros(3,3))],4,4)) ;
+# compute_multiviewF_from_cams!(0.0, F_multiview2, gt_cameras; normalize=true);
+# F′ = unwrap(F_multiview2);
+# rank(F′)
+# F_multiview2[2,3] = 0.02368376472974777*F_multiview2[2,3];
+# F_multiview2[3,2] = 0.02368376472974777*F_multiview2[3,2];
+# norm.(F_multiview)./norm.(F_multiview2)
+# F′ == F
+
+# # gt_cameras = Cameras{Float64}(repeat([Camera(zeros(3,4))], 5));
+# create_cameras!(gt_cameras, true);
+# F_multiview = SparseMatrixCSC{FundMat{Float64}, Int64}(repeat([FundMat(zeros(3,3))],6,6)) ;
+# # F_multiview = SparseMatrixCSC{FundMat{Float64}, Int64}(repeat([FundMat(zeros(3,3))],5,5)) ;
+# compute_multiviewF_from_cams!(0.0, F_multiview, gt_cameras, noise_type="angular");
 
 
 
 
+# Fs_file = MAT.matopen("MatFiles/tmp_new/street_database/Fs.mat")
+# F_vars = MAT.read(Fs_file);
+# close(Fs_file)
+# F = F_vars["FN"]
+# F_mv = wrap(F)
 
+# Ps_gt_file = MAT.matopen("MatFiles/tmp_new/street_database/Ps.mat")
+# Ps_gt_vars = MAT.read(Ps_gt_file);
+# close(Ps_gt_file)
+# Ps_gt = Ps_gt_vars
+# Ps_gt = Cameras{Float64}([Ps_gt[string(i)] for i=1:size(F_mv,2)]);
 
+# Ps_gt[2]'F_mv[2,15]*Ps_gt[15]
 
+# Matches_file = MAT.matopen("MatFiles/tmp_new/street_database/Matches.mat")
+# M_vars = MAT.read(Matches_file);
+# close(Matches_file)
+# M = Matrix{Float64}(M_vars["M"])
 
+# Ns_file = MAT.matopen("MatFiles/tmp_new/street_database/Ns.mat")
+# N_vars = MAT.read(Ns_file);
+# close(Ns_file)
+# N = N_vars["NormMat"]
 
+# Ps_gpsfm, t, FN_norm, N = MATLAB.mxcall(:runProjective_direct, 4, F, "gpsfm", M, [], N );
+# Ps_gpsfm = Cameras{Float64}(Ps_gpsfm);
+# F_mv_norm = wrap(FN_norm)
 
+# Ps_init = Cameras{Float64}([Camera{Float64}(inv(N[3*i-2:3*i, 3*i-2:3*i])*Ps_gpsfm[i]) for i=1:size(Ps_gpsfm,1)]);
+# Ps, Wts = outer_irls(recover_cameras_iterative, F_mv, Ps_gt, "subspace-angular", compute_error, max_iter_init=15, inner_method_max_it=5, weight_function=projective_synchronization.huber , c=projective_synchronization.c_huber, max_iterations=15, δ=1e-3, δ_irls=1e-1 , update_init="all", update="order-weights-update-all", set_anchor="fixed");
+# Ps = [N[3*i-2:3*i, 3*i-2:3*i]*Matrix(Ps[i]) for i=1:length(Ps) ];
 
-
-
-
-
-
-
-
-
-# # # # f_file = MAT.matopen("F_test.mat", "w")
-# # # # write(f_file, "F", F_unwrap)
-# # # # close(f_file) 
-
-# datasets = ["Dino 319","Dino 4983","Corridor", "House", "Gustav Vasa", "Folke Filbyter", "Park Gate", "Nijo", "Drinking Fountain", "Golden Statue", "Jonas Ahls", "De Guerre", "Dome", "Alcatraz Courtyard", "Alcatraz Water Tower", "Cherub", "Pumpkin", "Sphinx", "Toronto University", "Sri Thendayuthapani", "Porta san Donato", "Buddah Tooth", "Tsar Nikolai I", "Smolny Cathedral", "Skansen Kronan"];
-# folder_path = "/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/DataSet Proj/"
-
-# F, tracks, matches = get_data(folder_path, datasets[end-9]);
-# F_mv = copy(wrap(F))
-# Matches = spzeros(size(F_mv)...)
-# for i=1:size(F_mv,1)-1
-#     for j=i+1:size(F_mv,1)
-#         Matches[i,j] = copy(matches[i,j,1])
-#         Matches[j,i] = copy(matches[i,j,1])
-#     end
-# end
-# Adj_new = remove_fraction_edges(Matches; threshold=1012)
-# is_connected(Graph(Adj_new))
-# all(degree(Graph(Adj_new)) .>= 2) 
-# check_if_all_nodes_in_triplets(Adj_new)
-
-# tG, trips = get_triplet_cover(Adj_new; max_size=6000);
-# covered_nodes = unique(reduce(hcat,trips[tG[2][1:nv(tG[1])]]))
-# nonTriplet_cams = setdiff( collect(1:size(Adj_new,1)), covered_nodes)
-# C = rand(4,size(Adj_new,1))*100;
-# solvable = MATLAB.mxcall(:is_finite_solvable, 1, Matrix{Float64}(Adj_new), C, "eigs")
-
-# F_mv = SparseMatrixCSC{FundMat{Float64}, Int64}(F_mv .* Adj_new)
-# Matches = SparseMatrixCSC{Float64, Int64}(Matches .* Adj_new);
-
-# # # # F_multiview_gpsfm = F_mv;
-# F_multiview_gpsfm = copy(F_mv[1:end .∉ Ref(nonTriplet_cams), 1:end .∉ Ref(nonTriplet_cams)] )
-# F_unwrap = copy(unwrap(F_multiview_gpsfm));
-# Matches_gpsfm = copy(Matches[1:end .∉ Ref(nonTriplet_cams), 1:end .∉ Ref(nonTriplet_cams)])
-
-# tracks_cpy = zeros(size(tracks,1)-2*length(nonTriplet_cams), size(tracks,2))
-# j=1;
-# for i=1:size(tracks,1)
-#     if i in 2*nonTriplet_cams .- 1 || i in 2*nonTriplet_cams
-#         continue
-#     else
-#         tracks_cpy[j,:] = copy(tracks[i,:])
-#         j+=1 
-#     end
-# end
-
-# recovered_cameras_gpsfm, t, F, N = MATLAB.mxcall(:runProjective_direct, 4, unwrap(F_multiview_gpsfm), "gpsfm", Matches_gpsfm, tracks_cpy );
-# err = MATLAB.mxcall(:eval_from_julia, 1, recovered_cameras_gpsfm, tracks_cpy );
-
-# n = 65;
-# P_init = Vector{Camera{Float64}}(repeat([Camera_canonical], size(F_mv,1)));
-# P_init[covered_nodes] = recovered_cameras_gpsfm            
-# P_init[intersect(collect(1:n), unique(reduce(hcat,trips[tG[2][1:nv(tG[1])]])) ) ] = recovered_cameras_gpsfm            
-
-# # # for i =1:length(P_init)
-# #     # if isequal(P_init[i], Camera_canonical)
-# #         # continue
-# #     # end
-# #     # P_init[i] = inv(Ns[3*i-2:3*i, 3*i-2:3*i] )*P_init[i]
-# # # end
-
-# # # F_norm = Ns'*F*Ns;
-# # # F_mv_norm = copy(wrap(F_norm))
-# # # F_mv_norm = SparseMatrixCSC{FundMat{Float64}, Int64}(F_mv_norm .* Adj_new)
- 
-
-# Ps , Wts = outer_irls(recover_cameras_iterative, F_mv, Cameras{Float64}(P_init), "subspace_angular", compute_error, max_iter_init=15, inner_method_max_it=5, weight_function=projective_synchronization.cauchy , c=projective_synchronization.c_cauchy, max_iterations=15, δ=1e-3, δ_irls=1e-1 , update_init="all", update="order-weights-update-all", set_anchor="fixed");
-
-# err = MATLAB.mxcall(:eval_from_julia, 1, [Matrix{Float64}(P) for (i,P) in enumerate(Ps) ], tracks );
-
-# # err = MATLAB.mxcall(:eval_from_julia, 1, [Matrix{Float64}(P) for P in Ps ][intersect(collect(1:n), unique(reduce(hcat,trips[tG[2  ][1:nv(tG[1])]])) )] , tracks_cpy );
+# err = compute_error(Cameras{Float64}(Ps),Cameras{Float64}(Ps_gt), projective_synchronization.angular_distance);
+# println(mean(rad2deg.(err)))
 
 

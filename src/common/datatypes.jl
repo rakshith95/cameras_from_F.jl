@@ -1,6 +1,8 @@
 const Camera{T <: AbstractFloat}       = SMatrix{3,4, T}
 
-const Camera_canonical = Camera{Float64}( [ [1,0,0 ] [0,1,0] [0,0,1] [0,0,0] ] )
+const Camera_canonical = Camera{Float64}( [ [1,0,0 ] [0,1,0] [0,0,1] [0,0,0] ] );;
+
+const AffineCamera_canonical = Camera{Float64}( [ [1,0,0] [0,1,0] [0,0,0] [0,0,1] ] );
 
 const Cameras{T <: AbstractFloat}      = Vector{Camera{T}}
 
@@ -27,6 +29,16 @@ const FundMats{T <: AbstractFloat}     = Vector{FundMat{T}}
 const I₄ = SMatrix{4,4,Float64}(I)
 
 const K₃₄ = get_commutation_matrix(3,4)
+
+struct CameraParams{T<:AbstractFloat}
+    f₁::T
+    f₂::T
+    pp::Pt2D{T}
+    α::T
+    K::SMatrix{3,3,T};
+end 
+CameraParams(f::T, pp::Pt2D{T}, α=0.0) where T<:AbstractFloat = CameraParams{T}(f,f,pp,α, SMatrix{3,3,T}([[f,0,0];[α,f,0];[pp[1],pp[2],1]]));
+CameraParams(f₁::T, f₂::T, pp::Pt2D{T}, α=0.0) where T<:AbstractFloat = CameraParams{T}(f₁,f₂,pp,α, SMatrix{3,3,T}([[f₁,0,0];[α,f₂,0];[pp[1],pp[2],1]]));
 
 function homogenize(Pt::Pt2D{T})::Pt2D_homo{T} where T
     return Pt2D_homo{T}([Pt; 1])

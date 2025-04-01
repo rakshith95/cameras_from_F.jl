@@ -278,6 +278,16 @@ function recover_cameras_baselines_general(bigF::AbstractSparseMatrix, method::S
     extend_node = 0 
     iters = 1
     triplet_root = triplets[iters]
+
+    if contains(method, "colombo")
+        Ps[triplet_root] = get_cams_from_triplet_colombo(F_trips(F_multiview, SVector{3,Int}(sort(triplet_root))))[1]
+    elseif contains(method, "sinha")
+        Ps_root, Fs_root  = get_cams_from_triplet_sinha(F_trips(F_multiview, SVector{3,Int}(sort(triplet_root))))
+        Ps[triplet_root] = Ps_root;
+        F_multiview[triplet_root[3], triplet_root[2]]  = Fs_root[end];
+    end
+    covered_nodes[triplet_root] .= true
+
     while !can_extend
         if iters >= length(triplets)
             break
@@ -302,16 +312,6 @@ function recover_cameras_baselines_general(bigF::AbstractSparseMatrix, method::S
         return Ps, covered_nodes
 
     end
-
-    if contains(method, "colombo")
-        Ps[triplet_root] = get_cams_from_triplet_colombo(F_trips(F_multiview, SVector{3,Int}(sort(triplet_root))))[1]
-    elseif contains(method, "sinha")
-        Ps_root, Fs_root  = get_cams_from_triplet_sinha(F_trips(F_multiview, SVector{3,Int}(sort(triplet_root))))
-        Ps[triplet_root] = Ps_root;
-        F_multiview[triplet_root[3], triplet_root[2]]  = Fs_root[end];
-    end
-
-    covered_nodes[triplet_root] .= true
 
     next_nodes = Vector{Int}([extend_node])
     iters = 0
