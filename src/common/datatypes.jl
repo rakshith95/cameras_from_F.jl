@@ -30,6 +30,14 @@ const I₄ = SMatrix{4,4,Float64}(I)
 
 const K₃₄ = get_commutation_matrix(3,4)
 
+function AffineCamera(params::SVector{8,T}) where T<:AbstractFloat
+    return Camera{T}([params[1:4]';params[5:end]';[0 0 0 1]])
+end
+
+function AffineCamera(A::AbstractMatrix{T}, t::AbstractVector{T}) where T<:AbstractFloat
+    return Camera{T}( [ [ A t]; [zeros(1,3) 1]]  )
+end
+
 struct CameraParams{T<:AbstractFloat}
     f₁::T
     f₂::T

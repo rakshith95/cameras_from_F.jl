@@ -1,6 +1,6 @@
 module cameras_from_F
 
-import StructArrays, Distributions, MAT, StatsBase, Random, projective_synchronization, Combinatorics, MATLAB, ForwardDiff
+import JuMP, Clp, StructArrays, Distributions, MAT, StatsBase, Random, projective_synchronization, Combinatorics, MATLAB, ForwardDiff
 
 using LinearAlgebra, StaticArrays, Statistics, SparseArrays, Graphs, Arpack, ProgressBars, TiledIteration
 
@@ -20,6 +20,7 @@ end
 #General
 include("common/datatypes.jl")
 include("solvers/solvers.jl")
+include("solvers/affine_solvers.jl")
 include("solvers/baseline_solvers.jl")
 include("solvers/recover_cameras_iterative.jl")
 include("solvers/recover_cameras_global.jl")

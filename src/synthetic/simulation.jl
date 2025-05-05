@@ -139,8 +139,8 @@ function noise_F_from_points(σ, P₁::Camera{T}, P₂::Camera{T}, resolution=(1
 end
 
 
-function noise_F_gaussian(σ, P₁::Camera{T}, P₂::Camera{T}; normalize=true) where T<:AbstractFloat
-    F = F_from_cams(P₁, P₂)
+function noise_F_gaussian(σ, P₁::Camera{T}, P₂::Camera{T}; F_estimation_fn=F_from_cams, normalize=true) where T<:AbstractFloat
+    F = F_estimation_fn(P₁, P₂)
     F_noised = F + rand(Distributions.Normal(0,σ), 3, 3) 
     # rank-2 approximation
     F_noisy_svd = svd(F_noised)
@@ -153,8 +153,8 @@ function noise_F_gaussian(σ, P₁::Camera{T}, P₂::Camera{T}; normalize=true) 
 end
     
 
-function  noise_F_angular(σ::T, P₁::Camera{T}, P₂::Camera{T}; normalize=true) where T<:AbstractFloat
-    F = F_from_cams(P₁, P₂)
+function  noise_F_angular(σ::T, P₁::Camera{T}, P₂::Camera{T}; F_estimation_fn=F_from_cams, normalize=true) where T<:AbstractFloat
+    F = F_estimation_fn(P₁, P₂)
     θ = abs(rand(Distributions.Normal(0,σ)))
     if iszero(θ)
         if normalize
@@ -174,12 +174,16 @@ function  noise_F_angular(σ::T, P₁::Camera{T}, P₂::Camera{T}; normalize=tru
     end
 end
 
-function create_cameras!(cameras::Cameras, normalize)
+function create_cameras!(cameras::Cameras; normalize=true, affine=false)
     num_cams = size(cameras,1)
     for i=1:num_cams
-        cameras[i] = Camera{Float64}(rand(3,4))
-        if normalize
-            cameras[i] = cameras[i]/norm(cameras[i],2)
+        if !affine
+            cameras[i] = Camera{Float64}(rand(3,4))
+            if normalize
+                cameras[i] = cameras[i]/norm(cameras[i],2)
+            end
+        else
+            cameras[i] = AffineCamera(SVector{8,Float64}(rand(8)))
         end
     end
 end 
@@ -197,7 +201,7 @@ end
 #     return Fⱼᵢ
 # end
 
-function F_from_cams(Pᵢ::Camera{T}, Pⱼ::Camera{T}) where T
+function F_from_cams(Pᵢ::Camera{T}, Pⱼ::Camera{T}) where T<:AbstractFloat
     # Returns Fⱼᵢ
     Fⱼᵢ = zeros(3,3)
     for i=1:3
@@ -207,15 +211,29 @@ function F_from_cams(Pᵢ::Camera{T}, Pⱼ::Camera{T}) where T
     end
     return FundMat{T}(Fⱼᵢ)
 end
- 
-function compute_error(GT_cameras::Cameras{T}, Recovered_cameras::Cameras{T}, error) where T<:AbstractFloat
-    H = relative_projectivity(Recovered_cameras, GT_cameras)
+
+function F_from_cams_gpsfm(Pᵢ::Camera{T}, Pⱼ::Camera{T}) where T<:AbstractFloat
+    # Returns Fⱼᵢ
+    # NOTE: IMPLEMENTED WITH GPSFM CONVENTION. REFER TO PAPER
+    Vᵢ = inv(Pᵢ[1:3,1:3])'
+    tᵢ = SVector{3,Float64}(-Vᵢ'*Pᵢ[:,end])
+
+    Vⱼ = inv(Pⱼ[1:3,1:3])'
+    tⱼ =  SVector{3,Float64}(-Vⱼ'*Pⱼ[:,end])
+
+    Fᵢⱼ = Vᵢ*(make_skew_symmetric(tᵢ) - make_skew_symmetric(tⱼ))*Vⱼ';
+    
+    return Fᵢⱼ' # Remeber this returns Fji, which is why we transpose
+end
+    
+function compute_error(GT_cameras::Cameras{T}, Recovered_cameras::Cameras{T}, error; affine=false) where T<:AbstractFloat
+    H = relative_projectivity(Recovered_cameras, GT_cameras; affine=affine)
     Ps_transformed = [Recovered_cameras[i]*H for i = 1:length(Recovered_cameras)];
 
     return [error(vec(Ps_transformed[i]), vec(GT_cameras[i])) for i=1:length(Recovered_cameras) ]
 end
 
-function compute_multiviewF_from_cams!(σ, F_multiview::AbstractSparseMatrix, cams::Cameras{T}; noise_type="angular", normalize=true) where T<:AbstractFloat
+function compute_multiviewF_from_cams!(σ, F_multiview::AbstractSparseMatrix, cams::Cameras{T}; F_estimation=F_from_cams, noise_type="angular", normalize=true) where T<:AbstractFloat
     n = length(cams)
     for i=1:n
         for j=1:i 
@@ -226,19 +244,19 @@ function compute_multiviewF_from_cams!(σ, F_multiview::AbstractSparseMatrix, ca
                 if isequal(cams[j],Camera_canonical) && isequal(cams[i], Camera_canonical)
                     F_multiview[i,j] = FundMat{T}(zeros(3,3))
                 else
-                    F_multiview[i,j] = noise_F_angular(σ, cams[j], cams[i]; normalize=normalize)
+                    F_multiview[i,j] = noise_F_angular(σ, cams[j], cams[i]; F_estimation_fn=F_estimation, normalize=normalize)
                 end
             elseif occursin("points", noise_type)
                 F_multiview[i,j] = noise_F_from_points(σ, cams[j], cams[i]; normalize=normalize)
             elseif occursin("gaussian", noise_type)
-                F_multiview[i,j] = noise_F_gaussian(σ, cams[j], cams[i]; normalize=normalize)
+                F_multiview[i,j] = noise_F_gaussian(σ, cams[j], cams[i]; F_estimation_fn=F_estimation, normalize=normalize)
             end
             F_multiview[j,i] = F_multiview[i,j]'
         end
     end
 end
 
-function create_synthetic_environment(σ, methods; noise_type="angular", error=projective_synchronization.angular_distance, kwargs...)
+function create_synthetic_environment(σ, methods; affine=false, noise_type="angular", error=projective_synchronization.angular_distance, kwargs...)
     normalize_cameras = get(kwargs, :normalize, true)
     n = get(kwargs, :num_cams, 25)
     ρ = get(kwargs, :holes_density, 0.0)
@@ -248,8 +266,9 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
     init_methods = get(kwargs, :init_methods, ["gpsfm"])
 
     gt_cameras = Cameras{Float64}(repeat([Camera(zeros(3,4))], n))
-    create_cameras!(gt_cameras, normalize_cameras)
-    F_multiview = SparseMatrixCSC{FundMat{Float64}, Int64}(repeat([FundMat(zeros(3,3))],n,n)) # Relative projectivities
+    create_cameras!(gt_cameras;normalize = normalize_cameras, affine=affine)
+    gt_cameras[1] = AffineCamera_canonical
+    F_multiview = SparseMatrixCSC{FundMat{Float64}, Int64}(repeat([FundMat(zeros(3,3))],n,n))
     compute_multiviewF_from_cams!(σ, F_multiview, gt_cameras, noise_type=noise_type)
         
     errs = zeros(n, 1)
@@ -269,6 +288,14 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
         A = triu(A,1) + triu(A,1)'
         G = Graph(A)
         if Graphs.is_connected(G)
+            if affine
+                if solvability_affine(A)
+                    break
+                else
+                    continue
+                end
+            end
+
             # Get nodes not covered by triplets 
             trips_time = @elapsed T = get_triplet_cover(A)
             if isnothing(T)
@@ -305,7 +332,13 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
             end
             A′[UT_outliers] .= 0
             A′[reverse.(UT_outliers)] .= 0.0
-            
+            if affine
+                if solvability_affine(A′)
+                    break
+                else
+                    continue
+                end
+            end
             tG2 , t2 = get_triplet_cover(A)
             covered_nodes2 = unique(reduce(hcat,t2[tG2[2][1:nv(tG2[1])]]))
             nonTriplet_cams2 = setdiff( collect(1:n), covered_nodes2)
@@ -321,13 +354,28 @@ function create_synthetic_environment(σ, methods; noise_type="angular", error=p
         end
         
         for ind in UT_outliers
-            F_out = rand(3,3)
-            F_out_svd = svd(F_out)
-            F_out = F_out_svd.U*diagm([F_out_svd.S[1:end-1];0])*F_out_svd.Vt
+            if affine
+                F_out = SMatrix{3,3,Float64}([[0 0 rand()];[0 0 rand()];rand(1,3)])
+            else
+                F_out = rand(3,3)
+                F_out_svd = svd(F_out)
+                F_out = F_out_svd.U*diagm([F_out_svd.S[1:end-1];0])*F_out_svd.Vt
+            end 
             F_multiview[ind] = FundMat{Float64}(F_out)
             F_multiview[CartesianIndex(reverse(ind.I))] = F_multiview[ind]'
         end
     end
+
+    if affine
+        Ps_est_affine = AffineCams_from_F(F_multiview; lad=false);
+        err = compute_error(gt_cameras, Ps_est_affine, error; affine=affine);
+        errs =  hcat(errs,err);
+        
+        # return errs[:,2:end]
+        return A, F_multiview, gt_cameras, Ps_est_affine
+    end
+
+
     F_multiview_gpsfm = missing
     recovered_cameras_gpsfm = missing
     gpsfm_results = missing
@@ -461,10 +509,19 @@ end
 # test_mthds = ["gpsfm", "baseline sinha", "subspace_angular", "subspace", "skew_symmetric_vectorized"]
 # test_mthds = ["skew_symmetric_vectorized", "subspace", "subspace-svd", "subspace_angular",] ;
 # test_mthds = ["gpsfm", "skew_symmetric_vectorized", "subspace_angular", "l2_kkt" ] ;
+# Err = create_synthetic_environment(0.0, test_mthds; outliers_density=0.0, holes_density=0.4, update_init="none", initialize=false, init_methods=[""], num_cams=25, noise_type="angular", update="order-random-update-all", set_anchor="fixed", max_iterations=20);
+
+# Affine
+# Err = create_synthetic_environment(0.0, []; affine=true, outliers_density=0.0, holes_density=0.0, update_init="none", initialize=false, init_methods=[""], num_cams=10, noise_type="angular", update="order-random-update-all", set_anchor="fixed", max_iterations=20);
+# println(rad2deg.(mean.(eachcol(Err))))
+# Adj, F, Ps_gt, Ps = create_synthetic_environment(0.1, []; affine=true, outliers_density=0.0, holes_density=0.0, update_init="none", initialize=false, init_methods=[""], num_cams=10, noise_type="angular", update="order-random-update-all", set_anchor="fixed", max_iterations=20);
+# Ps_gt[2]
+# Ps[1]
+# rad2deg(0.1)
+# mean(rad2deg.(compute_error(Ps_gt, Ps, projective_synchronization.angular_distance; affine=true)))
 
 # test_mthds = ["skew_symmetric_vectorized"]
 # Err = create_synthetic_environment(0.0, test_mthds; outliers_density=0.0, holes_density=0.4, update_init="none", initialize=false, init_methods=[""], num_cams=25, noise_type="angular", update="order-random-update-all", set_anchor="fixed", max_iterations=20);
-# println(rad2deg.(mean.(eachcol(Err))))
 
 # gt_cameras = Cameras{Float64}(repeat([Camera(zeros(3,4))], 4));
 # create_cameras!(gt_cameras, true);
@@ -522,8 +579,3 @@ end
 # Ps_init = Cameras{Float64}([Camera{Float64}(inv(N[3*i-2:3*i, 3*i-2:3*i])*Ps_gpsfm[i]) for i=1:size(Ps_gpsfm,1)]);
 # Ps, Wts = outer_irls(recover_cameras_iterative, F_mv, Ps_gt, "subspace-angular", compute_error, max_iter_init=15, inner_method_max_it=5, weight_function=projective_synchronization.huber , c=projective_synchronization.c_huber, max_iterations=15, δ=1e-3, δ_irls=1e-1 , update_init="all", update="order-weights-update-all", set_anchor="fixed");
 # Ps = [N[3*i-2:3*i, 3*i-2:3*i]*Matrix(Ps[i]) for i=1:length(Ps) ];
-
-# err = compute_error(Cameras{Float64}(Ps),Cameras{Float64}(Ps_gt), projective_synchronization.angular_distance);
-# println(mean(rad2deg.(err)))
-
-

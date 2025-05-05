@@ -356,7 +356,6 @@ end
 # println(errors_ours)
 
 
-
 # folder_path = "/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/DataSet Proj/"
 # F, tracks, matches = get_data(folder_path, datasets[1]);
 # res = threshold_and_eval(F,tracks,matches, 134;synch=true, norm=false);
@@ -397,9 +396,6 @@ end
 # file = MAT.matopen("Holes_withL1_20.mat", "w")
 # write(file, "E", Errs_matrix)   
 # close(file)
-
-
-
 
 # times_matrix = stack(stack.(timers)');
 # times_matrix = dropdims(times_matrix, dims = tuple(findall(size(times_matrix) .== 1)...));
