@@ -1,9 +1,9 @@
 function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothing, weights=ones(size(F_multiview)...), kwargs...) 
     method = get(kwargs, :method, "subspace_angular")
-    max_it = get(kwargs, :max_iterations, 100)
+    max_it = get(kwargs, :max_iterations, 10)
     max_updates = get(kwargs, :max_updates, max_it)
     min_updates = get(kwargs, :min_updates, 10)
-    δ = get(kwargs, :δ, 1e-3)
+    δ = get(kwargs, :δ, 1e-4)
     initial_updated = get(kwargs, :update_init, "all")
     update_method = get(kwargs, :update, "order-weights-update-all")
     set_anchor = get(kwargs, :anchor, "fixed")
@@ -66,15 +66,15 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothi
         updated .= 1
         if !isnothing(X₀)
             for i=1:num_cams
-                if Ps[i] == Camera_canonical
+                if Ps[i] == Camera_canonical/norm(Camera_canonical)
                     updated[i] = 0 
                 end
             end
         end
     end
 
-    C = eigenvector_centrality(G)
-    # C = degree_centrality(G)
+    # C = eigenvector_centrality(G)
+    C = degree_centrality(G)
     # C = closeness_centrality(G)
 
     if occursin("nothing", set_anchor) || occursin("none", set_anchor)
@@ -109,7 +109,6 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothi
     end
 
     iter = 0
-    # println(anchor, "\t", nodes)
 
     exit_loop = false
     while !exit_loop
@@ -127,15 +126,21 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothi
                 if prev_steady[j] && steady[j] 
                     continue
                 end
-                N = Ne[j]
-                if iszero(updated[N])
+                N = Ne[j]                
+                # println(j, "\t", N, "\t",  N[updated[N].!=0])
+                num_updated_nodes = (length(nodes) - sum(iszero.(updated)))
+                num_updated_neighbors = (length(N) - sum(iszero.(updated[N]))) 
+                # println(j, "\t", num_updated_nodes, "\t", num_updated_neighbors)
+                if (((num_updated_nodes  >= 2) &&  ( num_updated_neighbors < 2) )) || (num_updated_neighbors < 1)
                     continue
                 end
                 oldP = Ps[j]
                 updated_N = N[updated[N].!=0]
+                # println(j, "\t", updated_N)
                 F_inds = [ CartesianIndex(j,i) for i in updated_N ]
-                Ps[j] = avg(Ps[updated_N], FundMats{Float64}(F[F_inds]), weights[F_inds], oldP)
-                # Ps[j] = avg(Ps[updated_N], FundMats{Float64}(F[F_inds]), weights[F_inds])
+                # println(j, "\t", updated_N, weights[F_inds])
+                # Ps[j] = avg(Ps[updated_N], FundMats{Float64}(F[F_inds]), weights[F_inds], oldP)
+                Ps[j] = avg(Ps[updated_N], FundMats{Float64}(F[F_inds]), weights[F_inds])
 
                 updated[j] += 1
                 steady[j] = updated[j] >= min_updates && projective_synchronization.angular_distance(vec(oldP), vec(Ps[j])) <= δ
@@ -158,8 +163,8 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothi
             oldP = Ps[j]
             updated_N = N[updated[N].!=0]
             F_inds = [ CartesianIndex(j,i) for i in updated_N ]
-            Ps[j] = avg(Ps[updated_N], FundMats{Float64}(F[F_inds]), weights[F_inds], oldP) 
-            # Ps[j] = avg(Ps[updated_N], FundMats{Float64}(F[F_inds]), weights[F_inds])
+            # Ps[j] = avg(Ps[updated_N], FundMats{Float64}(F[F_inds]), weights[F_inds], oldP) 
+            Ps[j] = avg(Ps[updated_N], FundMats{Float64}(F[F_inds]), weights[F_inds])
             updated[j] += 1
             steady[j] = updated[j] >= min_updates && projective_synchronization.angular_distance(vec(oldP), vec(Ps[j])) <= δ
             if all(steady) || all(updated .>= max_updates)
@@ -167,9 +172,10 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothi
                 break
             end
         end
+        # println(mean(rad2deg.(compute_error(X₀, Ps, projective_synchronization.angular_distance))))
         iter += 1
     end
     # println("\n\n")
-    println(iter)
+    # println(iter)
     return Cameras{Float64}(Ps)
 end

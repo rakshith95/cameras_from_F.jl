@@ -1,6 +1,6 @@
 module cameras_from_F
 
-import JuMP, Clp, StructArrays, Distributions, MAT, StatsBase, Random, projective_synchronization, Combinatorics, MATLAB, ForwardDiff
+import StructArrays, Distributions, MAT, StatsBase, Random, projective_synchronization, Combinatorics, MATLAB, ForwardDiff
 
 using LinearAlgebra, StaticArrays, Statistics, SparseArrays, Graphs, Arpack, ProgressBars, TiledIteration
 

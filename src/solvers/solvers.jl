@@ -5,7 +5,12 @@ function get_NullSpace_ev(A::AbstractMatrix{T}) where {T<:AbstractFloat}
 end
 
 function get_NullSpace_svd(A::AbstractMatrix{T};full=false) where {T<:AbstractFloat}
-    A_svd = svd(A, full=full)
+    A_svd = missing
+    try
+        A_svd = svd(A, full=full)
+    catch
+        # display(A)
+    end
     return A_svd.V[:, end] #  Last column of V is solution for null space problem
 end
 
@@ -47,39 +52,32 @@ function relative_projectivity( Ps::Cameras{T}, Qs::Cameras{T}; affine=false ) w
     end
     return H
 end
-    
-function relative_affinity(Ps::Cameras{T}, Qs::Cameras{T}) where T<:AbstractFloat
-    ncams = length(Ps)
-    D = zeros(8*ncams, 12)
-    I₃ = SMatrix{3,3,T}(I)
-    res = zeros(8*ncams)
-    z₆₃ = zeros(6,3)
-    z₂₉ = zeros(2,9)
 
-    for i=1:ncams
-        M1 = @views(Ps[i][1:2,1:3])
-        t1 = @views(Ps[i][1:2,end])
-        M2 = @views(Qs[i][1:2,1:3])
-        t2 = @views(Qs[i][1:2,end])
-
-        D[(i-1)*8 + 1: 8*i,: ] = [ [kron(I₃,M1) z₆₃]; [z₂₉ M1]]
-        res[(i-1)*8 + 1: 8*i] = [vec(M2);(t2 - t1)]
+function F_pts_aff(x::Pts2D{T}, x′::Pts2D{T}) where T<:AbstractFloat
+    num_pts = length(x)
+    D = zeros(num_pts, 5)
+    for i=1:num_pts
+        D[i,:] = [x′[i]' x[i]' 1]
     end
-    h = D\res
-    H = SMatrix{4,4,T}( [ [reshape(h[1:9],3,3) reshape(h[10:12],3,1)]; [zeros(1,3) 1] ] )
-    return H
+    f = get_NullSpace_svd(D)
+    return SMatrix{3,3,Float64}( [ zeros(2,2)  f[1:2]; f[3:end]'] )
 end
-    
-function F_8pt(x::Pts2D_homo{T}, x′::Pts2D_homo{T}) where T
-    F_8pt(euclideanize.(x), euclideanize.(x′))
+
+function F_8pt(x::Pts2D_homo{T}, x′::Pts2D_homo{T}; affine=false) where T
+    if affine
+        F_pts_aff(euclideanize.(x), euclideanize.(x′))
+    else
+        F_8pt(euclideanize.(x), euclideanize.(x′))
+    end
 end
 
 function F_8pt(x::Pts2D{T}, x′::Pts2D{T}) where T
-    A = ones(8,9)
-    for i=1:8
-        @views A[i,1:8] = [x′[i][1]*x[i][1], x′[i][1]*x[i][2], x′[i][1], x′[i][2]*x[i][1], x′[i][2]*x[i][2], x′[i][2], x[i][1], x[i][2]]
+    num_pts = length(x);
+    A = ones(num_pts,9)
+    for i=1:num_pts
+        @views A[i,1:num_pts] = [x′[i][1]*x[i][1], x′[i][1]*x[i][2], x′[i][1], x′[i][2]*x[i][1], x′[i][2]*x[i][2], x′[i][2], x[i][1], x[i][2]]
     end
-    A = SMatrix{8,9,T}(A)
+    A = SMatrix{num_pts,9,T}(A)
     U_Σ_V = svd(A, full=true)
     f = U_Σ_V.V[:,end]
     F = SMatrix{3,3,T}( transpose( reshape(f,(3,3)) ) )
@@ -232,12 +230,7 @@ function CamsFromF_gpsfm(F_mv::AbstractSparseMatrix)
             Uᵢ_svd = svd(Uᵢ)
             Uᵢ = Uᵢ_svd.U*diagm( [Uᵢ_svd.S[1:2];0] )*Uᵢ_svd.Vt;
         end
-
-        try
-            Tᵢ = inv(Vᵢ)*Uᵢ
-        catch
-            println(rank(Vᵢ), "\t", rank(Uᵢ))
-        end
+        Tᵢ = inv(Vᵢ)*Uᵢ
         Tᵢ = (1/2)*( Tᵢ - Tᵢ' )
         tᵢ = SVector{3,Float64}([-Tᵢ[2,end], Tᵢ[1,end], -Tᵢ[1,2]])
 

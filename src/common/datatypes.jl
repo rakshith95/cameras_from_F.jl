@@ -38,6 +38,10 @@ function AffineCamera(A::AbstractMatrix{T}, t::AbstractVector{T}) where T<:Abstr
     return Camera{T}( [ [ A t]; [zeros(1,3) 1]]  )
 end
 
+function vec_aff(P::Camera{T}) where T<:AbstractFloat
+    return SVector{8,T}([vec(P[1:2,1:3]);vec(P[1:2,end])])
+end
+
 struct CameraParams{T<:AbstractFloat}
     f₁::T
     f₂::T

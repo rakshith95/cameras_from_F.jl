@@ -54,6 +54,7 @@ function get_cams_from_triplet_sinha(F_triplet::FundMats{T}, Ps::Cameras{T}) whe
     D = [kron(transpose(pinv(Pⱼ)), (make_skew_symmetric(ekj)*eki))  -vec(Fkj) zeros(9); kron(Cⱼ',eki) zeros(3) -ekj];
     sol = D \ [vec(-make_skew_symmetric(ekj)*Mₖ*pinv(Pⱼ));-Mₖ*Cⱼ];
     v = sol[1:4];
+    # println(norm(D*sol - [vec(-make_skew_symmetric(ekj)*Mₖ*pinv(Pⱼ));-Mₖ*Cⱼ]))
     Pₖ = Mₖ + eki*transpose(v);
     Pₖ = Pₖ/norm(Pₖ)
     F̄kj = make_skew_symmetric(ekj)*Pₖ*pinv(Pⱼ);
@@ -275,7 +276,7 @@ function recover_cameras_baselines_general(bigF::AbstractSparseMatrix, method::S
     end
     
     can_extend = false
-    extend_node = 0 
+    extend_node = [] 
     iters = 1
     triplet_root = triplets[iters]
 
@@ -286,7 +287,6 @@ function recover_cameras_baselines_general(bigF::AbstractSparseMatrix, method::S
         Ps[triplet_root] = Ps_root;
         F_multiview[triplet_root[3], triplet_root[2]]  = Fs_root[end];
     end
-    covered_nodes[triplet_root] .= true
 
     while !can_extend
         if iters >= length(triplets)
@@ -298,8 +298,8 @@ function recover_cameras_baselines_general(bigF::AbstractSparseMatrix, method::S
             end
             if length(intersect(findall(x->x>0, view(Adj,i,1:num_cams)), triplet_root)) >= 2
                 can_extend = true
-                extend_node = i
-                break
+                extend_node = [extend_node;i]
+                # break
             end
         end
         if !can_extend
@@ -312,19 +312,30 @@ function recover_cameras_baselines_general(bigF::AbstractSparseMatrix, method::S
         return Ps, covered_nodes
 
     end
+    covered_nodes[triplet_root] .= true
 
-    next_nodes = Vector{Int}([extend_node])
+    next_nodes = Vector{Int}(extend_node)
     iters = 0
 
     while !all(covered_nodes)
         if iters>1e3
             break
         end
-        covered_cams = findall(x->x==true, covered_nodes)
+        if length(next_nodes) == 0
+            next_nodes = findall(x->x==false, covered_nodes)
+        end
+
         new_cam = next_nodes[1]
         next_nodes = next_nodes[2:end]
+        covered_cams = findall(x->x==true, covered_nodes)
+        if new_cam in covered_cams
+            continue
+        end
         new_cam_neighbors = findall(x->x>0, view(Adj,new_cam,1:num_cams))
+        # println(new_cam, "\t", new_cam_neighbors, "\t", covered_cams)
         common = intersect(new_cam_neighbors, covered_cams)
+
+        iters += 1
         if length(common) < 2
             continue
         end
@@ -353,7 +364,6 @@ function recover_cameras_baselines_general(bigF::AbstractSparseMatrix, method::S
             Ps[new_cam] = Ps_new[end];
         end
         covered_nodes[new_cam] = true
-        iters += 1
     end
     return Ps, covered_nodes
 end

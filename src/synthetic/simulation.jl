@@ -4,44 +4,12 @@ function reverse(a::CartesianIndex)
     return CartesianIndex(Base.reverse(a.I))
 end
 
-function get_max_component(G::SimpleGraph, components::AbstractVector)
-    max_comp = missing
-    max_num = 0 
-    for el in unique(components)
-        g = findall(components .== el);
-        if length(g) > max_num
-            max_num = length(g)
-            max_comp = g
-        end
-    end
-    return induced_subgraph(G, collect(edges(G))[max_comp])
-end
-
-function remove_fraction_edges(M::AbstractSparseMatrix; remove_frac=10, sample=false, threshold=0.0)
-    n = size(M,1)
-    A_orig = sparse(ones(n,n))
-    A_orig[findall(SparseMatrixCSC{Bool, Integer}(iszero.(M)))] .= 0
-    matches_ut = sort([(M[i,j], CartesianIndex(i,j)) for i=1:n for j=i+1:n if M[i,j]>0])
-    scores_ut = [m[1] for m in matches_ut]
-    remove_num = Int(round((remove_frac/100)*length(matches_ut)))
-    if sample
-        wts = [(1/match[1]) for match in matches_ut]
-        remove_inds = StatsBase.sample(collect(1:length(matches_ut)), StatsBase.Weights(wts), remove_num, replace=false )
+function is_affine_F(F::SMatrix{3,3,T}, threshold=1e-5) where T<:AbstractFloat
+    if all(abs.(F[1:2,1:2]) .<= threshold)
+        return true
     else
-        if threshold > 0
-            remove_inds = findall(scores_ut .< threshold)
-        else
-            remove_inds = 1:remove_num
-        end
-            
+        return false
     end
-
-    for el in matches_ut[remove_inds]
-        A_orig[el[2]] = 0 
-        A_orig[reverse(el[2])] = 0
-    end
-    dropzeros!(A_orig)
-    return A_orig
 end
 
 function check_if_all_nodes_in_triplets(A::AbstractSparseMatrix) 
@@ -226,11 +194,27 @@ function F_from_cams_gpsfm(Pᵢ::Camera{T}, Pⱼ::Camera{T}) where T<:AbstractFl
     return Fᵢⱼ' # Remeber this returns Fji, which is why we transpose
 end
     
-function compute_error(GT_cameras::Cameras{T}, Recovered_cameras::Cameras{T}, error; affine=false) where T<:AbstractFloat
-    H = relative_projectivity(Recovered_cameras, GT_cameras; affine=affine)
-    Ps_transformed = [Recovered_cameras[i]*H for i = 1:length(Recovered_cameras)];
+function affine_split_error(cam1_vec::SVector{8,T}, cam2_vec::SVector{8,T}, error) where T<:AbstractFloat
+    return [error(cam1_vec[1:6], cam2_vec[1:6]), error(cam1_vec[7:8], cam2_vec[7:8]) ]
+end
 
-    return [error(vec(Ps_transformed[i]), vec(GT_cameras[i])) for i=1:length(Recovered_cameras) ]
+function compute_error(cams1::Cameras{T}, cams2::Cameras{T}, error; affine=false, split=false) where T<:AbstractFloat
+    H = relative_projectivity(cams2, cams1; affine=affine)
+    Ps_transformed = [cams2[i]*H for i = 1:length(cams2)];
+    if affine
+        if split
+            # display(Recovered_cameras[1])
+            # for i=1:length(cams2)
+                # println(vec_aff(Ps_transformed[i]),"\t", vec_aff(cams1[i]))
+            # end            
+            
+            return [ affine_split_error( vec_aff(Ps_transformed[i]), vec_aff(cams1[i]), error) for i=1:length(cams2) ]
+        else
+            return [error(vec_aff(Ps_transformed[i]), vec_aff(cams1[i])) for i=1:length(cams2) ]
+        end
+    else
+        return [error(vec(Ps_transformed[i]), vec(cams1[i])) for i=1:length(cams2) ]
+    end
 end
 
 function compute_multiviewF_from_cams!(σ, F_multiview::AbstractSparseMatrix, cams::Cameras{T}; F_estimation=F_from_cams, noise_type="angular", normalize=true) where T<:AbstractFloat
@@ -258,6 +242,7 @@ end
 
 function create_synthetic_environment(σ, methods; affine=false, noise_type="angular", error=projective_synchronization.angular_distance, kwargs...)
     normalize_cameras = get(kwargs, :normalize, true)
+    split_error = get(kwargs, :split_err, false)
     n = get(kwargs, :num_cams, 25)
     ρ = get(kwargs, :holes_density, 0.0)
     Ρ = get(kwargs, :outliers_density, 0.0)
@@ -267,9 +252,9 @@ function create_synthetic_environment(σ, methods; affine=false, noise_type="ang
 
     gt_cameras = Cameras{Float64}(repeat([Camera(zeros(3,4))], n))
     create_cameras!(gt_cameras;normalize = normalize_cameras, affine=affine)
-    gt_cameras[1] = AffineCamera_canonical
+    # TRY WITH 0 BLOCKS FOR GT 
     F_multiview = SparseMatrixCSC{FundMat{Float64}, Int64}(repeat([FundMat(zeros(3,3))],n,n))
-    compute_multiviewF_from_cams!(σ, F_multiview, gt_cameras, noise_type=noise_type)
+    compute_multiviewF_from_cams!(σ, F_multiview, gt_cameras, noise_type=noise_type; normalize=false)
         
     errs = zeros(n, 1)
     times = zeros(length(methods))
@@ -289,13 +274,13 @@ function create_synthetic_environment(σ, methods; affine=false, noise_type="ang
         G = Graph(A)
         if Graphs.is_connected(G)
             if affine
+                # println("HERE")
                 if solvability_affine(A)
                     break
                 else
                     continue
                 end
             end
-
             # Get nodes not covered by triplets 
             trips_time = @elapsed T = get_triplet_cover(A)
             if isnothing(T)
@@ -320,13 +305,13 @@ function create_synthetic_environment(σ, methods; affine=false, noise_type="ang
     end
     recovered_cams_trips = n - length(nonTriplet_cams)
     F_multiview = SparseMatrixCSC{FundMat{Float64}, Int64}(F_multiview .* A)
+    UT_outliers = missing
     if Ρ > 0
         num_UT =  length(findall(triu(A,1) .!= 0))
         num_outliers = Int(round(Ρ*num_UT))
-        UT_outliers = missing
         while true
             A′ = copy(A)
-            UT_outliers = StatsBase.sample( findall(triu(A,1).!=0), num_outliers, replace=false)
+            UT_outliers = StatsBase.sample(findall(triu(A,1).!=0), num_outliers, replace=false)
             if length(UT_outliers) == 0
                 break
             end
@@ -339,7 +324,7 @@ function create_synthetic_environment(σ, methods; affine=false, noise_type="ang
                     continue
                 end
             end
-            tG2 , t2 = get_triplet_cover(A)
+            tG2 , t2 = get_triplet_cover(A′)
             covered_nodes2 = unique(reduce(hcat,t2[tG2[2][1:nv(tG2[1])]]))
             nonTriplet_cams2 = setdiff( collect(1:n), covered_nodes2)
             if length(nonTriplet_cams2) == 0
@@ -366,20 +351,20 @@ function create_synthetic_environment(σ, methods; affine=false, noise_type="ang
         end
     end
 
-    if affine
-        Ps_est_affine = AffineCams_from_F(F_multiview; lad=false);
-        err = compute_error(gt_cameras, Ps_est_affine, error; affine=affine);
-        errs =  hcat(errs,err);
-        
-        # return errs[:,2:end]
-        return A, F_multiview, gt_cameras, Ps_est_affine
-    end
-
+    # if affine
+    #     Ps_est_affine = AffineCams_from_F(F_multiview; lad=true);
+    #     err = compute_error(gt_cameras, Ps_est_affine, error; affine=affine);
+    #     println("FINISHED AFF")
+    #     errs =  hcat(errs,err);
+    #     return gt_cameras, F_multiview, errs[:,2:end]
+        # return UT_outliers, F_multiview, gt_cameras
+    # end
 
     F_multiview_gpsfm = missing
     recovered_cameras_gpsfm = missing
     gpsfm_results = missing
     t₀ = 0
+    cam_init_vec = []
     for init_method in init_methods
         P_init = Vector{Camera{Float64}}(repeat([Camera_canonical], n))
         if occursin("gpsfm", lowercase(init_method)) || occursin("sinha", lowercase(init_method)) || occursin("colombo", lowercase(init_method)) 
@@ -414,11 +399,34 @@ function create_synthetic_environment(σ, methods; affine=false, noise_type="ang
                 if i in init_missing
                     P_init_cpy[i] = Camera_canonical
                 end
+                cam_init_vec = [cam_init_vec; vec(P_init_cpy[i]/norm(P_init_cpy[i]) )]
             end
             recovered_cameras = nothing
             Wts = nothing
             for (ct,method) in enumerate(methods)
-                if occursin("synch", lowercase(method))
+                if occursin("afflin", lowercase(method))
+                    # p = [[1;0;0;1;0;0;0;0];4;15;17;18];
+                    if occursin("lad", lowercase(method))
+                        Ps_est_affine = AffineCams_from_F_vectorized(copy(F_multiview); lad=true);
+                    elseif occursin("irls", lowercase(method))
+                        if occursin("outer", lowercase(method))
+                            Ps_est_affine, wts = lsq_irls((wts)->AffineCams_from_F_vectorized(F_multiview,wts; irls=false), copy(F_multiview); weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy,  max_it=30, δ=deg2rad(1e-3));
+                        else
+                            wts_window=1;wts_set_last=0;extend_wts=false; regularize=false
+                            occursin("filter", lowercase(method))   ? wts_window=4 : missing
+                            occursin("set_last", lowercase(method)) ? wts_set_last=12 : missing
+                            occursin("only_t", lowercase(method)) ? extend_wts=true : missing 
+                            occursin("regularize", lowercase(method)) ? regularize=true : missing
+
+                            Ps_est_affine = AffineCams_from_F_vectorized(copy(F_multiview); irls=true, wts_window=wts_window, wts_set_last=wts_set_last, extend_wts=extend_wts, regularize=regularize);
+                        end
+                    else
+                        Ps_est_affine = AffineCams_from_F_vectorized(copy(F_multiview); );
+                    end
+                    err = compute_error(gt_cameras, Ps_est_affine, error; split=split_error, affine=affine);
+                    # err = compute_error(Ps_est_affine, gt_cameras,  error; split=split_error, affine=affine);
+                    errs =  hcat(errs,err);
+                elseif occursin("synch", lowercase(method))
                     # synch_results = MATLAB.mxcall(:runProjectiveSim, 2, F_unwrap, "synch")
                     matches = ones(div(size(F_unwrap,1),3), div(size(F_unwrap,1),3))
 
@@ -433,9 +441,11 @@ function create_synthetic_environment(σ, methods; affine=false, noise_type="ang
                 elseif occursin("gpsfm", lowercase(method)) 
                     if init && any(occursin.("gpsfm", lowercase.(init_methods)) )
                         err = compute_error(gt_cameras[1:n .∉ Ref(nonTriplet_cams)], recovered_cameras_gpsfm, error);
-                        if iszero(missing_initial)
-                            errs =  hcat(errs,[err;ones(length(nonTriplet_cams))*mean(err)] );
-                        end
+                        # if iszero(missing_initial)
+                            # errs =  hcat(errs,[err;ones(length(nonTriplet_cams))*mean(err)] );
+                        # end
+                        errs =  hcat(errs,[err;ones(length(nonTriplet_cams))*mean(err)] );
+                        # println(rad2deg(mean(err)),"\t", rad2deg(mean(compute_error(recovered_cameras_gpsfm, gt_cameras[1:n .∉ Ref(nonTriplet_cams)], error))))
                         times[ct] = gpsfm_results[2]
                         recovered_cams[ct] = recovered_cams_trips
                     else
@@ -479,6 +489,14 @@ function create_synthetic_environment(σ, methods; affine=false, noise_type="ang
                         end
         
                     end
+                elseif occursin("global", method)
+                    t = @elapsed x_est = MATLAB.mxcall(:global_optimizer, 1, Vector{Float64}(cam_init_vec), unwrap(F_multiview) )
+                    est_cameras = Cameras{Float64}(repeat([Camera(zeros(3,4))],n ))
+                    for i=1:n
+                        est_cameras[i] = reshape(x_est[(i-1)*12+1:i*12], 3,4)
+                    end
+                    times[ct] = t₀ + t
+                    errs = hcat(errs, compute_error(gt_cameras, est_cameras, error))                    
                 else
                     if occursin("irls", method)
                         ti = @elapsed recovered_cameras, Wts = outer_irls(recover_cameras_iterative, F_multiview, P_init_cpy, method, compute_error, max_iter_init=50, error_measure=projective_synchronization.angular_distance, inner_method_max_it=5, weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy, max_iterations=50, δ_irls=1.0, update_init="all", update="order-weights-update-all",  set_anchor="fixed");
@@ -494,9 +512,9 @@ function create_synthetic_environment(σ, methods; affine=false, noise_type="ang
             end
         end
     end
-
     return errs[:,2:end]
-    # return errs[:,2:end], recovered_cams
+    # return errs[:,2:end], F_multiview, gt_cameras
+    # return A, F_multiview, gt_cameras, errs[:,2:end]
     # return times
 end
 
@@ -506,76 +524,138 @@ end
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/GPSFM/3rdparty/fromPPSFM/')"
 # MATLAB.mat"addpath('/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/GPSFM/3rdparty/vgg_code/')"
  
-# test_mthds = ["gpsfm", "baseline sinha", "subspace_angular", "subspace", "skew_symmetric_vectorized"]
+# test_mthds = ["gpsfm", "baseline sinha", "subspace_angular", "subspace", "skew_symmetric_v4ectorized"]
 # test_mthds = ["skew_symmetric_vectorized", "subspace", "subspace-svd", "subspace_angular",] ;
 # test_mthds = ["gpsfm", "skew_symmetric_vectorized", "subspace_angular", "l2_kkt" ] ;
-# Err = create_synthetic_environment(0.0, test_mthds; outliers_density=0.0, holes_density=0.4, update_init="none", initialize=false, init_methods=[""], num_cams=25, noise_type="angular", update="order-random-update-all", set_anchor="fixed", max_iterations=20);
+# test_mthds = ["gpsfm", "skew_symmetric_vectorized_irls"]
+# Err = create_synthetic_environment(0.05, test_mthds;  outliers_density=0.0, holes_density=0.4, update_init="all", initialize=true, init_methods=["gpsfm"], num_cams=25, noise_type="angular", update="random-all", set_anchor="fixed", max_iterations=50);
+# println(rad2deg.(mean.(eachcol(Err))))
+# println(rad2deg.((Err[:,2])))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # Affine
-# Err = create_synthetic_environment(0.0, []; affine=true, outliers_density=0.0, holes_density=0.0, update_init="none", initialize=false, init_methods=[""], num_cams=10, noise_type="angular", update="order-random-update-all", set_anchor="fixed", max_iterations=20);
+# test_mthds = [ "afflin", "afflin_irls","afflin_irls-filter", "afflin_irls-filter-set_last", "afflin_irls-filter-set_last-only_t", "afflin_irls-filter-set_last-only_t-regularize"]
+# test_mthds = [ "afflin", "afflin_irls-outer", "afflin_irls-filter"]
+# Err,F, Ps_gt = create_synthetic_environment(deg2rad(0.0), test_mthds; error=norm_err, split_err=false, affine=true, outliers_density=0.1, holes_density=0.0, initialize=false, init_methods=[""], num_cams=25, noise_type="angular");
+# Err = create_synthetic_environment(0.0, test_mthds; error=norm_err, split_err=true, affine=true, outliers_density=0.01, holes_density=0.0, initialize=false, init_methods=[""], num_cams=25, noise_type="angular");
+# mean.(eachcol(Err))
+
+
+# Ps_est = AffineCams_from_F_vectorized(copy(F); irls=true, wts_window=4, wts_set_last=0, extend_wts=false, regularize=false);
+# mean( compute_error(Ps_gt,Ps_est,  norm_err;  split=false,affine=true) )
+# mean( compute_error(Ps_est,Ps_gt,  norm_err;  split=false,affine=true) )
+
 # println(rad2deg.(mean.(eachcol(Err))))
-# Adj, F, Ps_gt, Ps = create_synthetic_environment(0.1, []; affine=true, outliers_density=0.0, holes_density=0.0, update_init="none", initialize=false, init_methods=[""], num_cams=10, noise_type="angular", update="order-random-update-all", set_anchor="fixed", max_iterations=20);
-# Ps_gt[2]
-# Ps[1]
-# rad2deg(0.1)
-# mean(rad2deg.(compute_error(Ps_gt, Ps, projective_synchronization.angular_distance; affine=true)))
+# Adj, F, Ps_gt, Ps = create_synthetic_environment(0.0, []; affine=true, outliers_density=0.1, holes_density=0.0, initialize=false, init_methods=[""], num_cams=20, noise_type="angular");
+# UT_Outies, F, Ps_gt = create_synthetic_environment(0.0, []; affine=true, outliers_density=0.01, holes_density=0.0, initialize=false, init_methods=[""], num_cams=35, noise_type="angular");
+# wts = [ CartesianIndex(i,j) in UT_Outies ? 0.0 : 1.0 for i=1:size(F,1)-1 for j=i+1:size(F,1) if (!iszero(F[i,j])) ];
 
-# test_mthds = ["skew_symmetric_vectorized"]
-# Err = create_synthetic_environment(0.0, test_mthds; outliers_density=0.0, holes_density=0.4, update_init="none", initialize=false, init_methods=[""], num_cams=25, noise_type="angular", update="order-random-update-all", set_anchor="fixed", max_iterations=20);
+# p = [vec_aff(Ps_gt[1]); Ps_gt[2][1,:]] ;
+# p = [[1;0;0;1;0;0;0;0];rand(4)];
+# p = [[1;0;0;1;0;0;0;0];4;15;17;18];
 
-# gt_cameras = Cameras{Float64}(repeat([Camera(zeros(3,4))], 4));
-# create_cameras!(gt_cameras, true);
-# F_multiview = SparseMatrixCSC{FundMat{Float64}, Int64}(repeat([FundMat(zeros(3,3))],4,4)) ;
-# compute_multiviewF_from_cams!(0.0, F_multiview, gt_cameras; normalize=false);
-# F = unwrap(F_multiview);
+# Ps_est_lsq = AffineCams_from_F_vectorized(F; irls=true);
+# Ps_gt[1]
+# mean( compute_error(Ps_est_lsq, Ps_gt, norm_err;  split=true,affine=true) )
 
+# rad2deg(mean( compute_error( Ps_est_lsq, Ps_gt, norm_err;  affine=true) ))
+# mean( compute_error(Ps_est_lsq, Ps_gt, norm_err;  affine=true) )
 
-# F_multiview2 = SparseMatrixCSC{FundMat{Float64}, Int64}(repeat([FundMat(zeros(3,3))],4,4)) ;
-# compute_multiviewF_from_cams!(0.0, F_multiview2, gt_cameras; normalize=true);
-# F′ = unwrap(F_multiview2);
-# rank(F′)
-# F_multiview2[2,3] = 0.02368376472974777*F_multiview2[2,3];
-# F_multiview2[3,2] = 0.02368376472974777*F_multiview2[3,2];
-# norm.(F_multiview)./norm.(F_multiview2)
-# F′ == F
+# Ps_est_lsq_alt = AffineCams_from_F_vectorized_alternate(F; irls=false, ambiguity_params=p[end-3:end]*1);
+# rad2deg(mean( compute_error( Ps_est_lsq_alt, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
+# mean( compute_error(Ps_est_lsq_alt, Ps_gt, norm_err;  affine=true) )
 
-# # gt_cameras = Cameras{Float64}(repeat([Camera(zeros(3,4))], 5));
-# create_cameras!(gt_cameras, true);
-# F_multiview = SparseMatrixCSC{FundMat{Float64}, Int64}(repeat([FundMat(zeros(3,3))],6,6)) ;
-# # F_multiview = SparseMatrixCSC{FundMat{Float64}, Int64}(repeat([FundMat(zeros(3,3))],5,5)) ;
-# compute_multiviewF_from_cams!(0.0, F_multiview, gt_cameras, noise_type="angular");
+# rad2deg(mean( compute_error( Ps_gt, Ps_est_lsq, projective_synchronization.angular_distance;  affine=true) ))
+# mean( compute_error( Ps_gt, Ps_est_lsq, norm_err;  affine=true) )
 
 
+# Ps_est_sep = AffineCams_from_F_separate(F);
+# rad2deg(mean( compute_error( Ps_gt, Ps_est_normal1, projective_synchronization.angular_distance;  affine=true) ))
+# rad2deg(mean( compute_error( Ps_est_normal1, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
+# rad2deg(mean( compute_error( Ps_gt, Ps_est_lsq, projective_synchronization.angular_distance;  affine=true) ))
+# rad2deg(mean( compute_error( Ps_est_sep, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
+
+# Ps_est_lad = AffineCams_from_F_vectorized(F; lad=true);
+# rad2deg(mean( compute_error( Ps_est_lad, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
+# rad2deg(mean( compute_error( Ps_gt, Ps_est_lad, projective_synchronization.angular_distance;  affine=true) ))
+
+# Ps_est_lsq_inner_irls = AffineCams_from_F_vectorized(F; irls=true);
+# Ps_est_sep_irls = AffineCams_from_F_separate(F; irls=true);
+# rad2deg(mean( compute_error( Ps_est_lsq_inner_irls, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
+# rad2deg(mean( compute_error( Ps_gt, Ps_est_lsq_inner_irls, projective_synchronization.angular_distance;  affine=true) ))
+# rad2deg(mean( compute_error( Ps_est_sep_irls, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
+
+# Ps_est_outer_irls, wts = lsq_irls((wts)->AffineCams_from_F_vectorized(F,wts; irls=false), F; weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy,  max_it=50, δ=deg2rad(1e-3));
+# rad2deg(mean(compute_error(Ps_est_outer_irls, Ps_gt, projective_synchronization.angular_distance; affine=true)))
+# mean( compute_error(Ps_est_outer_irls, Ps_gt, norm_err;  affine=true) )
+
+# rad2deg(mean(compute_error(Ps_gt, Ps_est_outer_irls, projective_synchronization.angular_distance; affine=true)))
+
+# Ps_est_gnc, wts = gnc((wts)->AffineCams_from_F_vectorized(F,wts; irls=false), F;σ_init=10, σ_final = 0.5, γ=0.5, max_it=100, δ=deg2rad(1e-6));
+# rad2deg(mean(compute_error(Ps_est_gnc, Ps_gt, projective_synchronization.angular_distance; affine=true)))
+# rad2deg(mean(compute_error(Ps_gt, Ps_est_gnc, projective_synchronization.angular_distance; affine=true)))
+
+# rad2deg(mean(compute_error( Ps_gt,Ps_est_gnc, projective_synchronization.angular_distance; affine=true)))
+# rad2deg(mean(compute_error(Ps_gt, Ps_est_irls, projective_synchronization.angular_distance; affine=true)))
 
 
-# Fs_file = MAT.matopen("MatFiles/tmp_new/street_database/Fs.mat")
-# F_vars = MAT.read(Fs_file);
-# close(Fs_file)
-# F = F_vars["FN"]
-# F_mv = wrap(F)
 
-# Ps_gt_file = MAT.matopen("MatFiles/tmp_new/street_database/Ps.mat")
-# Ps_gt_vars = MAT.read(Ps_gt_file);
-# close(Ps_gt_file)
-# Ps_gt = Ps_gt_vars
-# Ps_gt = Cameras{Float64}([Ps_gt[string(i)] for i=1:size(F_mv,2)]);
 
-# Ps_gt[2]'F_mv[2,15]*Ps_gt[15]
-
-# Matches_file = MAT.matopen("MatFiles/tmp_new/street_database/Matches.mat")
-# M_vars = MAT.read(Matches_file);
-# close(Matches_file)
-# M = Matrix{Float64}(M_vars["M"])
-
-# Ns_file = MAT.matopen("MatFiles/tmp_new/street_database/Ns.mat")
-# N_vars = MAT.read(Ns_file);
-# close(Ns_file)
-# N = N_vars["NormMat"]
-
-# Ps_gpsfm, t, FN_norm, N = MATLAB.mxcall(:runProjective_direct, 4, F, "gpsfm", M, [], N );
-# Ps_gpsfm = Cameras{Float64}(Ps_gpsfm);
-# F_mv_norm = wrap(FN_norm)
-
-# Ps_init = Cameras{Float64}([Camera{Float64}(inv(N[3*i-2:3*i, 3*i-2:3*i])*Ps_gpsfm[i]) for i=1:size(Ps_gpsfm,1)]);
-# Ps, Wts = outer_irls(recover_cameras_iterative, F_mv, Ps_gt, "subspace-angular", compute_error, max_iter_init=15, inner_method_max_it=5, weight_function=projective_synchronization.huber , c=projective_synchronization.c_huber, max_iterations=15, δ=1e-3, δ_irls=1e-1 , update_init="all", update="order-weights-update-all", set_anchor="fixed");
-# Ps = [N[3*i-2:3*i, 3*i-2:3*i]*Matrix(Ps[i]) for i=1:length(Ps) ];
+# Hartley comment about not fixing all dof in minimization 
+# What does it mean for solvablity? rank deficiency 
+# Majorization - Minimization 
+# Prioritize the fixed point method first, and then the other methods 
