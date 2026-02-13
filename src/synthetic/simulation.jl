@@ -146,12 +146,12 @@ function create_cameras!(cameras::Cameras; normalize=true, affine=false)
     num_cams = size(cameras,1)
     for i=1:num_cams
         if !affine
-            cameras[i] = Camera{Float64}(rand(3,4))
+            cameras[i] = Camera{Float64}(randn(3,4))
             if normalize
                 cameras[i] = cameras[i]/norm(cameras[i],2)
             end
         else
-            cameras[i] = AffineCamera(SVector{8,Float64}(rand(8)))
+            cameras[i] = AffineCamera(SVector{8,Float64}(randn(8)))
         end
     end
 end 
@@ -241,7 +241,8 @@ function compute_multiviewF_from_cams!(σ, F_multiview::AbstractSparseMatrix, ca
 end
 
 function create_synthetic_environment(σ, methods; affine=false, noise_type="angular", error=projective_synchronization.angular_distance, kwargs...)
-    normalize_cameras = get(kwargs, :normalize, true)
+    normalize_cameras = get(kwargs, :normalize_cams, true)
+    normalize_F = get(kwargs, :normalize_Fs, true)
     split_error = get(kwargs, :split_err, false)
     n = get(kwargs, :num_cams, 25)
     ρ = get(kwargs, :holes_density, 0.0)
@@ -254,7 +255,7 @@ function create_synthetic_environment(σ, methods; affine=false, noise_type="ang
     create_cameras!(gt_cameras;normalize = normalize_cameras, affine=affine)
     # TRY WITH 0 BLOCKS FOR GT 
     F_multiview = SparseMatrixCSC{FundMat{Float64}, Int64}(repeat([FundMat(zeros(3,3))],n,n))
-    compute_multiviewF_from_cams!(σ, F_multiview, gt_cameras, noise_type=noise_type; normalize=false)
+    compute_multiviewF_from_cams!(σ, F_multiview, gt_cameras, noise_type=noise_type; normalize=normalize_F)
         
     errs = zeros(n, 1)
     times = zeros(length(methods))
@@ -340,11 +341,14 @@ function create_synthetic_environment(σ, methods; affine=false, noise_type="ang
         
         for ind in UT_outliers
             if affine
-                F_out = SMatrix{3,3,Float64}([[0 0 rand()];[0 0 rand()];rand(1,3)])
+                F_out = SMatrix{3,3,Float64}([[0 0 randn()];[0 0 randn()];randn(1,3)])
             else
-                F_out = rand(3,3)
+                F_out = randn(3,3)
                 F_out_svd = svd(F_out)
                 F_out = F_out_svd.U*diagm([F_out_svd.S[1:end-1];0])*F_out_svd.Vt
+                if normalize_F
+                    F_out = F_out/norm(F_out)
+                end
             end 
             F_multiview[ind] = FundMat{Float64}(F_out)
             F_multiview[CartesianIndex(reverse(ind.I))] = F_multiview[ind]'
@@ -527,8 +531,8 @@ end
 # test_mthds = ["gpsfm", "baseline sinha", "subspace_angular", "subspace", "skew_symmetric_v4ectorized"]
 # test_mthds = ["skew_symmetric_vectorized", "subspace", "subspace-svd", "subspace_angular",] ;
 # test_mthds = ["gpsfm", "skew_symmetric_vectorized", "subspace_angular", "l2_kkt" ] ;
-# test_mthds = ["gpsfm", "skew_symmetric_vectorized_irls"]
-# Err = create_synthetic_environment(0.05, test_mthds;  outliers_density=0.0, holes_density=0.4, update_init="all", initialize=true, init_methods=["gpsfm"], num_cams=25, noise_type="angular", update="random-all", set_anchor="fixed", max_iterations=50);
+# test_mthds = ["gpsfm", "skew_symmetric_vectorized"]
+# Err = create_synthetic_environment(0.0, test_mthds;  outliers_density=0.3, holes_density=0.4, update_init="all", initialize=true, init_methods=["gpsfm"], num_cams=25, noise_type="angular", update="random-all", set_anchor="fixed", max_iterations=50);
 # println(rad2deg.(mean.(eachcol(Err))))
 # println(rad2deg.((Err[:,2])))
 
