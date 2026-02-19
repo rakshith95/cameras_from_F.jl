@@ -18,9 +18,12 @@
 function compute_weights(Z::AbstractMatrix, Ẑ::AbstractMatrix;error_measure=projective_synchronization.angular_distance, weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy, h=projective_synchronization.h_robust)
     E_UT = error_measure.(UpperTriangular(Z),UpperTriangular(Ẑ))
     E = UpperTriangular(E_UT) + UpperTriangular(E_UT)'
+    # E = E_UT + E_UT'
     M = ones(Bool, size(Z)...)
     M[diagind(M)] .= false
     s = StatsBase.mad(E[.!isinf.(E) .&& UpperTriangular(M)])
+    # s = StatsBase.mad(E[.!isinf.(E) .&& M])
+
     if iszero(s)
         s = 1e-10
         # s = std(E[.!isinf.(E)])
@@ -50,6 +53,7 @@ function outer_irls(iterative_fn, input_var::SparseMatrixCSC, X₀::AbstractVect
         wts = init_wts
     end
     X_prev = copy(X₀)
+    X = copy(X_prev)
     while iter < max_iterations
         if iszero(iter)
             X = iterative_fn(input_var; X₀=copy(X₀), method=iterative_method, weights=wts, max_iterations=max_iter_init , kwargs...)
@@ -66,7 +70,7 @@ function outer_irls(iterative_fn, input_var::SparseMatrixCSC, X₀::AbstractVect
         X_prev = X
     end
     # println(iter)
-    return X_prev, wts
+    return X, wts
 end
 
 function norm_err(a::AbstractVecOrMat{T}, b::AbstractVecOrMat{T}) where T<:AbstractFloat

@@ -1,6 +1,6 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.12.4"
+julia_version = "1.12.5"
 manifest_format = "2.0"
 project_hash = "e850a959451c594fed4a51c7e7c35b8ebd130f44"
 
@@ -1109,8 +1109,6 @@ version = "17.7.0+0"
 
 [[deps.projective_synchronization]]
 deps = ["Arpack", "BenchmarkTools", "Distributions", "Graphs", "KrylovKit", "LinearAlgebra", "MAT", "MATLAB", "ProgressBars", "Random", "Revise", "SparseArrays", "StaticArrays", "Statistics", "StatsBase", "StructArrays", "TiledIteration"]
-git-tree-sha1 = "5e4a089621fb685d59d2d5f62f1bf869eb9a46e1"
-repo-rev = "main"
-repo-url = "/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/projective_synchronization.jl"
+path = "/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/projective_synchronization.jl"
 uuid = "804a50dd-d364-4a40-8def-afc57beda7bf"
 version = "0.1.1"

@@ -5,12 +5,7 @@ function get_NullSpace_ev(A::AbstractMatrix{T}) where {T<:AbstractFloat}
 end
 
 function get_NullSpace_svd(A::AbstractMatrix{T};full=false) where {T<:AbstractFloat}
-    A_svd = missing
-    try
-        A_svd = svd(A, full=full)
-    catch
-        # display(A)
-    end
+    A_svd = svd(A, full=full)
     return A_svd.V[:, end] #  Last column of V is solution for null space problem
 end
 
@@ -160,26 +155,30 @@ function recover_camera_subspace_angular(Ps::Cameras{T}, Fs::FundMats{T}, wts=on
 end
 
 function subspace_angular_distance(N::AbstractVector, c₀::AbstractVector{T}; wts=ones(length(N)), max_iterations=1e2, δ=1e-3, σ=1e-4) where T<:AbstractFloat
-    c = c₀
+    c_prev = copy(c₀)
+    c = copy(c₀)
     projective_synchronization.unit_normalize!(c)
     it=0
 
     while it < max_iterations
-        c_prev = c
-        c = SVector{length(c_prev)}(zero(c_prev))
+        copyto!(c_prev, c)
+        fill!(c,0.0)
         for i in collect(1:length(N))
             B = N[i]*N[i]';
             Bc = B*c_prev;
-            if ((c_prev'*Bc)/norm(Bc)) < 1
+            if ((dot(c_prev,Bc))/norm(Bc)) < 1
                 # var = (2*Bc*norm(Bc) - ((c_prev'*Bc)*((B'*Bc)/norm(Bc))) )/(norm(Bc)^2)
                 # c = c + wts[i]* ((1/√(1 - ((c_prev'*Bc)/norm(Bc))^2))*var)
-                c = c + wts[i]* ( ( 2*norm(Bc)^2*(Bc)  - (c_prev'*Bc)*(B'*Bc)) / ( norm(Bc)^4*√(norm(Bc)^2 - (c_prev'*Bc)^2 ) ) )
+                tmp_vec = ( ( 2*norm(Bc)^2*(Bc)  - (c_prev'*Bc)*(B'*Bc)) / ( norm(Bc)^4*√(norm(Bc)^2 - (c_prev'*Bc)^2 ) ) )
+                # c = c + wts[i]* tmp_vec
+                axpy!(wts[i],tmp_vec,c)
             end
         end           
         if iszero(c)
             return c_prev
         end
-        c = projective_synchronization.unit_normalize(c)
+        # c = projective_synchronization.unit_normalize(c)
+        projective_synchronization.unit_normalize!(c)
         it += 1
         # if norm(c-c_prev) < δ 
         if projective_synchronization.angular_distance(c,c_prev) < δ 
