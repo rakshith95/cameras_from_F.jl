@@ -73,7 +73,7 @@ function recover_cameras_iterative(F_multiview::AbstractSparseMatrix; X₀=nothi
         end
     end
 
-    C = eigenvector_centrality(G)
+    # C = eigenvector_centrality(G)
     # C = degree_centrality(G)
     # C = closeness_centrality(G)
 

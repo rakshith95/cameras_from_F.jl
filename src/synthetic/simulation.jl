@@ -142,6 +142,26 @@ function  noise_F_angular(σ::T, P₁::Camera{T}, P₂::Camera{T}; F_estimation_
     end
 end
 
+function noise_F_angular(σ::T, F::FundMat{T}; normalize=true) where T<:AbstractFloat
+    θ = abs(rand(Distributions.Normal(0,σ)))
+    if iszero(θ)
+        if normalize
+            return F/norm(F)
+        else
+            return F
+        end
+    end    
+    F_noisy = FundMat{T}(reshape(projective_synchronization.rotate_vector(vec(F), θ), 3, 3))
+    #Rank 2 approximation
+    F_noisy_svd = svd(F_noisy)
+    F_noisy = FundMat{T}(F_noisy_svd.U*diagm([F_noisy_svd.S[1:2];0.0])*F_noisy_svd.Vt)
+    if normalize
+        return F_noisy/norm(F_noisy)
+    else
+        return F_noisy
+    end
+end
+
 function create_cameras!(cameras::Cameras; normalize=true, affine=false)
     num_cams = size(cameras,1)
     for i=1:num_cams
@@ -516,7 +536,7 @@ function create_synthetic_environment(σ, methods; affine=false, noise_type="ang
             end
         end
     end
-    return errs[:,2:end]
+    return errs[:,2:end], F_multiview
     # return errs[:,2:end], F_multiview, gt_cameras
     # return A, F_multiview, gt_cameras, errs[:,2:end]
     # return times
@@ -531,8 +551,10 @@ end
 # test_mthds = ["gpsfm", "baseline sinha", "subspace_angular", "subspace", "skew_symmetric_v4ectorized"]
 # test_mthds = ["skew_symmetric_vectorized", "subspace", "subspace-svd", "subspace_angular",] ;
 # test_mthds = ["gpsfm", "skew_symmetric_vectorized", "subspace_angular", "l2_kkt" ] ;
-# test_mthds = ["gpsfm", "skew_symmetric_vectorized"]
-# Err = create_synthetic_environment(0.0, test_mthds;  outliers_density=0.3, holes_density=0.4, update_init="all", initialize=true, init_methods=["gpsfm"], num_cams=25, noise_type="angular", update="random-all", set_anchor="fixed", max_iterations=50);
+# test_mthds = ["gpsfm", "synch", "skew_symmetric_vectorized"]
+# test_mthds = ["gpsfm"]
+# Err = create_synthetic_environment(0.0, test_mthds;  outliers_density=0.0, holes_density=0.4, update_init="all", initialize=true, init_methods=["gpsfm"], num_cams=25, noise_type="angular", update="random-all", set_anchor="fixed", max_iterations=50);
+# Err, F_mult = create_synthetic_environment(0.0, test_mthds;  outliers_density=0.0, holes_density=0.4, update_init="all", initialize=true, init_methods=["gpsfm"], num_cams=10, noise_type="angular", update="random-all", set_anchor="fixed", max_iterations=50);
 # println(rad2deg.(mean.(eachcol(Err))))
 # println(rad2deg.((Err[:,2])))
 
@@ -543,123 +565,49 @@ end
 
 
 
+# n=4;
+# A = sprand(n,n, 0.0);
+# A[A.!=0] .= 1.0;
+# A = sparse(ones(n,n)) - A;
+# A = triu(A,1) + triu(A,1)';
 
+# P1 = Camera{Float64}(rand(3,4));
+# P2 = Camera{Float64}(rand(3,4));
+# P3 = Camera{Float64}(rand(3,4));
+# P4 = Camera{Float64}(rand(3,4));
+# gt_cams =Cameras{Float64}([P1,P2,P3,P4]);
 
+# F_mult = SparseMatrixCSC{FundMat{Float64}, Int64}(repeat([FundMat(zeros(3,3))],n,2))
+# compute_multiviewF_from_cams!(0.0, F_mult, gt_cams[1:2], noise_type="angular"; normalize=true);
+# F_mult = SparseMatrixCSC{FundMat{Float64}, Int64}(F_mult .* A)
 
+# X = Pt3D{Float64}(rand(3));
+# X_hom = Pt3D_homo(homogenize(X));
 
+# x1 = euclideanize(P1*X_hom);
+# x1_noised = x1 + 1e-1*rand(2);
+# x2 = euclideanize(P2*X_hom);
+# x2_noised = x2 + 1e-1*rand(2);
+# x3 = euclideanize(P3*X_hom);
+# x3_noised = x3 + 1e-1*rand(2);
+# x4 = euclideanize(P4*X_hom);
+# x4_noised = x4 + 1e-1*rand(2);
 
 
+# track_gt = track2D{point_id2D{Float64}}((point=[x1, x2, x3, x4], image_id=[1,2,3,4]));
+# track = track2D{point_id2D{Float64}}((point=[x1_noised, x2_noised], image_id=[1,2]));
 
 
+# X_og, δ =  mv_sampson_δ(track, F_mult);
+# X̂ = X_og + δ;
 
+# norm(unwrap_track(track_gt) - X_og)
+# norm(unwrap_track(track_gt) - unwrap_track(track))
+# norm(unwrap_track(track_gt) - X̂)
 
+# e_geom = norm(unwrap_track(track_gt) - unwrap_track(track))^2
+# e_sampson = dot(δ,δ)
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# Affine
-# test_mthds = [ "afflin", "afflin_irls","afflin_irls-filter", "afflin_irls-filter-set_last", "afflin_irls-filter-set_last-only_t", "afflin_irls-filter-set_last-only_t-regularize"]
-# test_mthds = [ "afflin", "afflin_irls-outer", "afflin_irls-filter"]
-# Err,F, Ps_gt = create_synthetic_environment(deg2rad(0.0), test_mthds; error=norm_err, split_err=false, affine=true, outliers_density=0.1, holes_density=0.0, initialize=false, init_methods=[""], num_cams=25, noise_type="angular");
-# Err = create_synthetic_environment(0.0, test_mthds; error=norm_err, split_err=true, affine=true, outliers_density=0.01, holes_density=0.0, initialize=false, init_methods=[""], num_cams=25, noise_type="angular");
-# mean.(eachcol(Err))
-
-
-# Ps_est = AffineCams_from_F_vectorized(copy(F); irls=true, wts_window=4, wts_set_last=0, extend_wts=false, regularize=false);
-# mean( compute_error(Ps_gt,Ps_est,  norm_err;  split=false,affine=true) )
-# mean( compute_error(Ps_est,Ps_gt,  norm_err;  split=false,affine=true) )
-
-# println(rad2deg.(mean.(eachcol(Err))))
-# Adj, F, Ps_gt, Ps = create_synthetic_environment(0.0, []; affine=true, outliers_density=0.1, holes_density=0.0, initialize=false, init_methods=[""], num_cams=20, noise_type="angular");
-# UT_Outies, F, Ps_gt = create_synthetic_environment(0.0, []; affine=true, outliers_density=0.01, holes_density=0.0, initialize=false, init_methods=[""], num_cams=35, noise_type="angular");
-# wts = [ CartesianIndex(i,j) in UT_Outies ? 0.0 : 1.0 for i=1:size(F,1)-1 for j=i+1:size(F,1) if (!iszero(F[i,j])) ];
-
-# p = [vec_aff(Ps_gt[1]); Ps_gt[2][1,:]] ;
-# p = [[1;0;0;1;0;0;0;0];rand(4)];
-# p = [[1;0;0;1;0;0;0;0];4;15;17;18];
-
-# Ps_est_lsq = AffineCams_from_F_vectorized(F; irls=true);
-# Ps_gt[1]
-# mean( compute_error(Ps_est_lsq, Ps_gt, norm_err;  split=true,affine=true) )
-
-# rad2deg(mean( compute_error( Ps_est_lsq, Ps_gt, norm_err;  affine=true) ))
-# mean( compute_error(Ps_est_lsq, Ps_gt, norm_err;  affine=true) )
-
-# Ps_est_lsq_alt = AffineCams_from_F_vectorized_alternate(F; irls=false, ambiguity_params=p[end-3:end]*1);
-# rad2deg(mean( compute_error( Ps_est_lsq_alt, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
-# mean( compute_error(Ps_est_lsq_alt, Ps_gt, norm_err;  affine=true) )
-
-# rad2deg(mean( compute_error( Ps_gt, Ps_est_lsq, projective_synchronization.angular_distance;  affine=true) ))
-# mean( compute_error( Ps_gt, Ps_est_lsq, norm_err;  affine=true) )
-
-
-# Ps_est_sep = AffineCams_from_F_separate(F);
-# rad2deg(mean( compute_error( Ps_gt, Ps_est_normal1, projective_synchronization.angular_distance;  affine=true) ))
-# rad2deg(mean( compute_error( Ps_est_normal1, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
-# rad2deg(mean( compute_error( Ps_gt, Ps_est_lsq, projective_synchronization.angular_distance;  affine=true) ))
-# rad2deg(mean( compute_error( Ps_est_sep, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
-
-# Ps_est_lad = AffineCams_from_F_vectorized(F; lad=true);
-# rad2deg(mean( compute_error( Ps_est_lad, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
-# rad2deg(mean( compute_error( Ps_gt, Ps_est_lad, projective_synchronization.angular_distance;  affine=true) ))
-
-# Ps_est_lsq_inner_irls = AffineCams_from_F_vectorized(F; irls=true);
-# Ps_est_sep_irls = AffineCams_from_F_separate(F; irls=true);
-# rad2deg(mean( compute_error( Ps_est_lsq_inner_irls, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
-# rad2deg(mean( compute_error( Ps_gt, Ps_est_lsq_inner_irls, projective_synchronization.angular_distance;  affine=true) ))
-# rad2deg(mean( compute_error( Ps_est_sep_irls, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
-
-# Ps_est_outer_irls, wts = lsq_irls((wts)->AffineCams_from_F_vectorized(F,wts; irls=false), F; weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy,  max_it=50, δ=deg2rad(1e-3));
-# rad2deg(mean(compute_error(Ps_est_outer_irls, Ps_gt, projective_synchronization.angular_distance; affine=true)))
-# mean( compute_error(Ps_est_outer_irls, Ps_gt, norm_err;  affine=true) )
-
-# rad2deg(mean(compute_error(Ps_gt, Ps_est_outer_irls, projective_synchronization.angular_distance; affine=true)))
-
-# Ps_est_gnc, wts = gnc((wts)->AffineCams_from_F_vectorized(F,wts; irls=false), F;σ_init=10, σ_final = 0.5, γ=0.5, max_it=100, δ=deg2rad(1e-6));
-# rad2deg(mean(compute_error(Ps_est_gnc, Ps_gt, projective_synchronization.angular_distance; affine=true)))
-# rad2deg(mean(compute_error(Ps_gt, Ps_est_gnc, projective_synchronization.angular_distance; affine=true)))
-
-# rad2deg(mean(compute_error( Ps_gt,Ps_est_gnc, projective_synchronization.angular_distance; affine=true)))
-# rad2deg(mean(compute_error(Ps_gt, Ps_est_irls, projective_synchronization.angular_distance; affine=true)))
-
-
-
-
-# Hartley comment about not fixing all dof in minimization 
-# What does it mean for solvablity? rank deficiency 
-# Majorization - Minimization 
-# Prioritize the fixed point method first, and then the other methods 
+# e_sampson_CF = (homogenize(x2_noised)'*F_mult[2,1]*homogenize(x1_noised))^2 * inv( (F_mult[2,1]*homogenize(x1_noised))[1]^2 + (F_mult[2,1]*homogenize(x1_noised))[2]^2 + (F_mult[1,2]*homogenize(x2_noised))[1]^2 + (F_mult[1,2]*homogenize(x2_noised))[2]^2 )

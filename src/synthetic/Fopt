@@ -1,0 +1,73 @@
+
+# X = rand(4,20)*10;
+# P1 = Camera{Float64}(rand(3,4));
+# P2 = Camera{Float64}(rand(3,4));
+# P3 = Camera{Float64}(rand(3,4));
+
+# x1 = P1*X;
+# x2 = P2*X;
+# x3 = P3*X;
+
+# x1_pts = Pts2D_homo{Float64}(eachcol(x1));
+# x1_pts = homogenize.(euclideanize.(x1_pts));
+
+# x2_pts = Pts2D_homo{Float64}(eachcol(x2));
+# x2_pts = homogenize.(euclideanize.(x2_pts));
+
+# x3_pts = Pts2D_homo{Float64}(eachcol(x3));
+# x3_pts = homogenize.(euclideanize.(x3_pts));
+
+
+# F21 = F_8ptNorm(x1_pts, x2_pts);
+# F31 = F_8ptNorm(x1_pts, x3_pts);
+# F32 = F_8ptNorm(x2_pts, x3_pts);
+
+
+# x1_noised = [homogenize(euclideanize(x1_pts[i]) + randn(2)*0.01 ) for i=1:length(x1_pts)]  ;
+# x2_noised = [homogenize(euclideanize(x2_pts[i]) + randn(2)*0.01 ) for i=1:length(x2_pts)]  ;
+# x3_noised = [homogenize(euclideanize(x3_pts[i]) + randn(2)*0.01 ) for i=1:length(x3_pts)]  ;
+
+# x1_noised = Pts2D_homo{Float64}([homogenize(randn(2)) for i=1:length(x1_pts)]);
+# x2_noised = Pts2D_homo{Float64}([homogenize(randn(2)) for i=1:length(x1_pts)]);
+# x3_noised = Pts2D_homo{Float64}([homogenize(randn(2)) for i=1:length(x1_pts)]);
+
+# F21_noised = F_8ptNorm(x1_noised, x2_noised);
+# F31_noised = F_8ptNorm(x1_noised, x3_noised);
+# F32_noised = F_8ptNorm(x2_noised, x3_noised);
+
+
+# Ps_est = get_cams_from_triplet_sinha(FundMats{Float64}([F21_noised,F31_noised,F32_noised]));
+# e = compute_error(Cameras{Float64}([P1,P2,P3]), Ps_est[1], projective_synchronization.angular_distance );
+# rad2deg(mean(e))
+
+
+
+# x2_noised[2]'*F21*x1_noised[2]
+# x2_noised[1] = homogenize(euclideanize(x2_noised[1])*5)
+
+# e1 =  (F21'*x2_noised[1]*x2_noised[1]'*F21)/(x2_noised[1]'*F21*F21'*x2_noised[1])*x1_noised[1];
+# norm(e1)
+# e2 =  (F12'*x1_noised[1]*x1_noised[1]'*F12)/(x1_noised[1]'*F12*F12'*x1_noised[1])*x2_noised[1];
+# norm(e2)
+
+
+
+# norm(cross(x1_pts[1], cross(F21'*x2_pts[1], F31'*x3_pts[1]) ))
+
+
+
+
+# X = vcat(reduce(vcat, euclideanize.(x1_pts)),reduce(vcat, euclideanize.(x2_pts)), reduce(vcat, euclideanize.(x3_pts)));
+# Fs = FundMats{Float64}([F21, F31, F32]);
+
+# triplet_coincidence_cost(X, Fs)
+
+
+
+# J = ForwardDiff.jacobian(x -> triplet_coincidence_cost(x, Fs), X)
+# println(J[:,1])
+
+
+# nnz(sparse(J))/length(sparse(J))
+
+

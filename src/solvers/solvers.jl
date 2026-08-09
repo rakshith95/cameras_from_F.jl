@@ -1,3 +1,6 @@
+
+
+
 function get_NullSpace_ev(A::AbstractMatrix{T}) where {T<:AbstractFloat}
     D = Symmetric(A'*A)
     (λ, ev) = eigen(D, 1:1)
@@ -58,19 +61,19 @@ function F_pts_aff(x::Pts2D{T}, x′::Pts2D{T}) where T<:AbstractFloat
     return SMatrix{3,3,Float64}( [ zeros(2,2)  f[1:2]; f[3:end]'] )
 end
 
-function F_8pt(x::Pts2D_homo{T}, x′::Pts2D_homo{T}; affine=false) where T
+function F_8pt(x::Pts2D_homo{T}, x′::Pts2D_homo{T}; normalize=true, affine=false) where T
     if affine
         F_pts_aff(euclideanize.(x), euclideanize.(x′))
     else
-        F_8pt(euclideanize.(x), euclideanize.(x′))
+        F_8pt(euclideanize.(x), euclideanize.(x′); normalize=normalize)
     end
 end
 
-function F_8pt(x::Pts2D{T}, x′::Pts2D{T}) where T
+function F_8pt(x::Pts2D{T}, x′::Pts2D{T}; normalize=true) where T
     num_pts = length(x);
     A = ones(num_pts,9)
     for i=1:num_pts
-        @views A[i,1:num_pts] = [x′[i][1]*x[i][1], x′[i][1]*x[i][2], x′[i][1], x′[i][2]*x[i][1], x′[i][2]*x[i][2], x′[i][2], x[i][1], x[i][2]]
+        @views A[i,1:8] = [x′[i][1]*x[i][1], x′[i][1]*x[i][2], x′[i][1], x′[i][2]*x[i][1], x′[i][2]*x[i][2], x′[i][2], x[i][1], x[i][2]]
     end
     A = SMatrix{num_pts,9,T}(A)
     U_Σ_V = svd(A, full=true)
@@ -80,24 +83,27 @@ function F_8pt(x::Pts2D{T}, x′::Pts2D{T}) where T
     F_svd = svd(F)
     D = diagm([F_svd.S[1:end-1];0])
     F = FundMat{T}(F_svd.U*D*F_svd.Vt)
-    return F      
+    return normalize ? F/norm(F) : F       
 end
 
-function F_8ptNorm(x::Pts2D{T}, x′::Pts2D{T} ) where T
+function F_8ptNorm(x::Pts2D{T}, x′::Pts2D{T} ; scale_normalize=true) where T
     x_homo = homogenize.(x)
     x′_homo = homogenize.(x′)
-    F_8ptNorm(x_homo, x′_homo)
+    F_8ptNorm(x_homo, x′_homo; scale_normalize=scale_normalize)
 end
 
-function F_8ptNorm(x_homo::Pts2D_homo{T}, x′_homo::Pts2D_homo{T}) where T
+function F_8ptNorm(x_homo::Pts2D_homo{T}, x′_homo::Pts2D_homo{T}; scale_normalize=true) where T
     N₁ = get_normalization_mat(x_homo)
     N₂ = get_normalization_mat(x′_homo)
-    x₁ = [N₁*x_homo[i] for i=1:length(x_homo)]
-    x₂ = [N₂*x′_homo[i] for i=1:length(x′_homo)]
+    F_8ptNorm(x_homo, x′_homo, N₁, N₂;scale_normalize=scale_normalize)
+end
 
+function F_8ptNorm(x_homo::Pts2D_homo{T}, x′_homo::Pts2D_homo{T}, N₁::SMatrix{3,3,T}, N₂::SMatrix{3,3,T};scale_normalize=true) where T<:AbstractFloat
+    x₁ = [N₁*x for x in x_homo]
+    x₂ = [N₂*x′ for x′ in x′_homo]
     F_norm = F_8pt(x₁, x₂)
     F = FundMat{T}(N₂'*F_norm*N₁)
-    return F
+    return scale_normalize ? F/norm(F) : F
 end
 
 function recover_camera_SkewSymm(Ps::Cameras{T}, Fs::FundMats{T}, wts=ones(length(Ps)), P₀=nothing) where T<:AbstractFloat
@@ -239,22 +245,6 @@ function CamsFromF_gpsfm(F_mv::AbstractSparseMatrix)
     return Ps
 end
 
-function get_scales(F_mv::AbstractSparseMatrix, Ps_est::Cameras{T}) where T<:AbstractFloat
-    n = length(Ps_est)
-    F_est = SparseMatrixCSC{FundMat{Float64}, Int64}(repeat([FundMat(zeros(3,3))],n,n)) 
-    compute_multiviewF_from_cams!(0.0, F_est, Ps_est; F_estimation=F_from_cams_gpsfm, noise_type="angular", normalize=false)
-    scales = spzeros(n,n)
-
-    for i=1:n-1
-        for j=i+1:n
-            scales[i,j] = norm(F_mv[i,j])/norm(F_est[i,j])
-            F_est[i,j] = scales[i,j]*F_est[i,j]
-            F_est[j,i] = F_est[i,j]'
-        end
-    end
-    return scales, F_est
-end
-
 function SVP(A::AbstractMatrix{T}, desired_rank) where T<:AbstractFloat
     n = size(A,1)
     A_svd = svd(A)
@@ -262,27 +252,117 @@ function SVP(A::AbstractMatrix{T}, desired_rank) where T<:AbstractFloat
     return A_proj
 end
 
-function iterative_scale_estimation(F_mv::AbstractSparseMatrix; error=projective_synchronization.angular_distance, δ=1e-2, max_iterations=100)
-    it=1
-    n = size(F_mv,1)
+function triplet_coincidence_cost(X::AbstractVector{T}, Fs::FundMats{T2}) where {T, T2<:AbstractFloat}
+    # X: 3*7 + 2*3n vector of points: [x11, x21,...,xn1, x12, x22,....,xn2, x13,x23,...xn3] 
+    # Assume that every point in an image has a correspondence in the other 2 images 
+    # Fs: {F21, F31, F32}
+    
+    # Output: 2*3n vector of error residuals: [ err(x11, F21,x12), err(x11, F31,x13), err(x21, F21,x23),...,err(xn1, F21,xn2),err(xn1, F31,xn3)]
+    
+    # First 3*7 params are for F21,F31, and F32 respectively. 
+    # parameterization from Sweeney et al. (2015)
 
-    Ps_prev = CamsFromF_gpsfm(F_mv)
-    scales, Fs_est = get_scales(F_mv, Ps_prev)
-    # Fs_est = wrap(SVP(unwrap(F_mv), 6))
-    Ps_est = missing
-    # display(Fs_est)
-    while (it<=max_iterations)
-        Ps_est = CamsFromF_gpsfm(Fs_est)
-        scales, Fs_est = get_scales(Fs_est, Ps_est)
-        # Fs_est = SparseMatrixCSC{FundMat{Float64}, Int64}(repeat([FundMat(zeros(3,3))],n,n)) 
-        # compute_multiviewF_from_cams!(0.0, Fs_est, Ps_est; F_estimation=F_from_cams_gpsfm, noise_type="angular", normalize=false)
+    nPts = div(length(X) - 7*length(Fs),6)
 
-        if rad2deg( mean(compute_error(Ps_prev, Ps_est, error)) ) <= δ
-            break
-        end
-        Ps_prev = Ps_est
-        it += 1
+    Fji = Fs[1];
+    Fij = Fji';
+    
+    Fki = Fs[2];
+    Fik = Fki';
+    
+    Fkj = Fs[3];
+    Fjk = Fkj';
+
+    # d = Vector{T}(undef, 3)
+    E = Vector{T}(undef, 2*3*n)
+    Y = @view X[7*length(Fs)+1:end]
+
+    for i=1:nPts
+        xᵢ = view(Y, (i-1)*2+1:2*i )
+        xᵢ_hom = homogenize(xᵢ)
+
+        xⱼ = view(Y,  2*n .+ ((i-1)*2+1:2*i) )
+        xⱼ_hom = homogenize(xⱼ)
+
+        xₖ = view(Y,  4*n .+ ((i-1)*2+1:2*i) )
+        xₖ_hom = homogenize(xₖ)
+
+        E[(i-1)*2+1] = norm( (Fji'*xⱼ_hom*xⱼ_hom'*Fji)/(xⱼ_hom'*Fji*Fji'*xⱼ_hom)*xᵢ_hom );
+        E[2*i] = norm( (Fki'*xₖ_hom*xₖ_hom'*Fki)/(xₖ_hom'*Fki*Fki'*xₖ_hom)*xᵢ_hom );
+
+        E[2*n + (i-1)*2+1] = norm( (Fij'*xᵢ_hom*xᵢ_hom'*Fij)/(xᵢ_hom'*Fij*Fij'*xᵢ_hom)*xⱼ_hom );
+        E[2*n + 2*i] = norm( (Fkj'*xₖ_hom*xₖ_hom'*Fkj)/(xₖ_hom'*Fkj*Fkj'*xₖ_hom)*xⱼ_hom );
+
+        E[4*n + (i-1)*2+1] = norm( (Fik'*xᵢ_hom*xᵢ_hom'*Fik)/(xᵢ_hom'*Fik*Fik'*xᵢ_hom)*xₖ_hom );
+        E[4*n + 2*i] = norm( (Fjk'*xⱼ_hom*xⱼ_hom'*Fjk)/(xⱼ_hom'*Fjk*Fjk'*xⱼ_hom)*xₖ_hom );
     end
-    println(it)
-    return Ps_est
+    return E
 end
+
+
+function triplet_coincidence_angle(X::AbstractVector{T}, Fs::FundMats{T2}) where {T, T2<:AbstractFloat}
+    # X: 2*3n vector of points: [x11, x21,...,xn1, x12, x22,....,xn2, x13,x23,...xn3] 
+    # Assume that every point in an image has a correspondence in the other 2 images 
+    # Fs: {F21, F31, F32}
+
+    # Output: 2*3n vector of error residuals: [ err(x11, F21,x12), err(x11, F31,x13), err(x21, F21,x23),...,err(xn1, F21,xn2),err(xn1, F31,xn3)]
+    
+    n = div(length(X),6)
+    Fji = Fs[1];
+    Fij = Fji';
+    
+    Fki = Fs[2];
+    Fik = Fki';
+    
+    Fkj = Fs[3];
+    Fjk = Fkj';
+
+    # d = Vector{T}(undef, 3)
+    E = Vector{T}(undef, 2*3*n) 
+
+    for i=1:n
+        xᵢ = view(X, (i-1)*2+1:2*i )
+        xᵢ_hom = homogenize(xᵢ)
+        
+        xⱼ = view(X,  2*n .+ ((i-1)*2+1:2*i) )
+        xⱼ_hom = homogenize(xⱼ)
+    
+        xₖ = view(X,  4*n .+ ((i-1)*2+1:2*i) )
+        xₖ_hom = homogenize(xₖ)
+
+        E[(i-1)*2+1] = acos(clamp(dot( xᵢ_hom , (I₃ - (Fji'*xⱼ_hom*xⱼ_hom'*Fji)/(dot(Fji'*xⱼ_hom, Fji'*xⱼ_hom)) )*xᵢ_hom ) / (norm(xᵢ_hom)*norm((I₃ - (Fji'*xⱼ_hom*xⱼ_hom'*Fji)/(dot(Fji'*xⱼ_hom, Fji'*xⱼ_hom)) )*xᵢ_hom) ),-1,1) );
+        E[2*i] = acos( clamp(dot( xᵢ_hom , (I₃ - (Fki'*xₖ_hom*xₖ_hom'*Fki)/(dot(Fki'*xₖ_hom, Fki'*xₖ_hom)) )*xᵢ_hom ) / (norm(xᵢ_hom)*norm((I₃ - (Fki'*xₖ_hom*xₖ_hom'*Fki)/(dot(Fki'*xₖ_hom, Fki'*xₖ_hom)) )*xᵢ_hom)),-1,1) );
+
+        E[2*n + (i-1)*2+1] = acos(clamp( dot( xⱼ_hom , (I₃ - (Fji*xᵢ_hom*xᵢ_hom'*Fji')/(dot(Fji*xᵢ_hom, Fji*xᵢ_hom)))*xⱼ_hom ) / (norm(xⱼ_hom)*norm((I₃ - (Fji*xᵢ_hom*xᵢ_hom'*Fji')/(dot(Fji*xᵢ_hom, Fji*xᵢ_hom)))*xⱼ_hom) ),-1,1) ) ;
+        E[2*n + 2*i] = acos(clamp( dot( xⱼ_hom , (I₃ - (Fkj'*xₖ_hom*xₖ_hom'*Fkj)/(dot(Fkj'*xₖ_hom, Fkj'*xₖ_hom)) )*xⱼ_hom ) / (norm(xⱼ_hom)*norm((I₃ - (Fkj'*xₖ_hom*xₖ_hom'*Fkj)/(dot(Fkj'*xₖ_hom, Fkj'*xₖ_hom)) )*xⱼ_hom)), -1,1) );
+
+        E[4*n + (i-1)*2+1] = acos(clamp( dot( xₖ_hom , (I₃ - (Fki*xᵢ_hom*xᵢ_hom'*Fki')/(dot(Fki*xᵢ_hom, Fki*xᵢ_hom)) )*xₖ_hom ) / (norm(xₖ_hom)*norm((I₃ - (Fki*xᵢ_hom*xᵢ_hom'*Fki')/(dot(Fki*xᵢ_hom, Fki*xᵢ_hom)) )*xₖ_hom)), -1,1) ); 
+        E[4*n + 2*i] = acos(clamp( dot( xₖ_hom , (I₃ - (Fkj*xⱼ_hom*xⱼ_hom'*Fkj')/(dot(Fkj*xⱼ_hom, Fkj*xⱼ_hom)) )*xₖ_hom ) / (norm(xₖ_hom)*norm((I₃ - (Fkj*xⱼ_hom*xⱼ_hom'*Fkj')/(dot(Fkj*xⱼ_hom, Fkj*xⱼ_hom)) )*xₖ_hom)), -1,1) );
+    end
+    return E
+end
+
+function point_dist_cost(X::AbstractVector{T}, X₀::Vector{Tf}) where {T,Tf<:AbstractFloat}
+    nPts = div(length(X),6)
+    E = Vector{T}(undef, 6*nPts)
+
+    for i=1:nPts
+        xᵢ = @view X[   (i-1)*2+1   :   i*2]
+        x₀i = @view X₀[ (i-1)*2+1   :   i*2  ]
+        
+        xⱼ = @view X[2*nPts     .+ ((i-1)*2+1:i*2)]
+        x₀j = @view X₀[2*nPts   .+ ((i-1)*2+1: i*2)  ]
+
+        xₖ = @view  X[4*nPts   .+ ((i-1)*2+1 : i*2)]
+        x₀k = @view X₀[4*nPts   .+ ((i-1)*2+1 : i*2)]
+
+        E[(i-1)*2+1 : i*2] = xᵢ - x₀i
+        E[2*nPts   .+ ((i-1)*2+1: i*2)] = xⱼ - x₀j        
+        E[4*nPts   .+ ((i-1)*2+1 : i*2)] = xₖ - x₀k
+    end
+    # E = X-X₀
+    return E
+end
+
+
+# Homography averaging sort of, for mosaics 

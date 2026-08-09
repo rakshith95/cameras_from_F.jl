@@ -1,0 +1,102 @@
+
+# Affine
+# test_mthds = [ "afflin", "afflin_irls","afflin_irls-filter", "afflin_irls-filter-set_last", "afflin_irls-filter-set_last-only_t", "afflin_irls-filter-set_last-only_t-regularize"]
+# test_mthds = [ "afflin", "afflin_irls-outer", "afflin_irls-filter"]
+# Err,F, Ps_gt = create_synthetic_environment(deg2rad(0.0), test_mthds; error=norm_err, split_err=false, affine=true, outliers_density=0.1, holes_density=0.0, initialize=false, init_methods=[""], num_cams=25, noise_type="angular");
+# Err = create_synthetic_environment(0.0, test_mthds; error=norm_err, split_err=true, affine=true, outliers_density=0.01, holes_density=0.0, initialize=false, init_methods=[""], num_cams=25, noise_type="angular");
+# mean.(eachcol(Err))
+
+
+# Ps_est = AffineCams_from_F_vectorized(copy(F); irls=true, wts_window=4, wts_set_last=0, extend_wts=false, regularize=false);
+# mean( compute_error(Ps_gt,Ps_est,  norm_err;  split=false,affine=true) )
+# mean( compute_error(Ps_est,Ps_gt,  norm_err;  split=false,affine=true) )
+
+# println(rad2deg.(mean.(eachcol(Err))))
+# Adj, F, Ps_gt, Ps = create_synthetic_environment(0.0, []; affine=true, outliers_density=0.1, holes_density=0.0, initialize=false, init_methods=[""], num_cams=20, noise_type="angular");
+# UT_Outies, F, Ps_gt = create_synthetic_environment(0.0, []; affine=true, outliers_density=0.01, holes_density=0.0, initialize=false, init_methods=[""], num_cams=35, noise_type="angular");
+# wts = [ CartesianIndex(i,j) in UT_Outies ? 0.0 : 1.0 for i=1:size(F,1)-1 for j=i+1:size(F,1) if (!iszero(F[i,j])) ];
+
+# p = [vec_aff(Ps_gt[1]); Ps_gt[2][1,:]] ;
+# p = [[1;0;0;1;0;0;0;0];rand(4)];
+# p = [[1;0;0;1;0;0;0;0];4;15;17;18];
+
+# Ps_est_lsq = AffineCams_from_F_vectorized(F; irls=true);
+# Ps_gt[1]
+# mean( compute_error(Ps_est_lsq, Ps_gt, norm_err;  split=true,affine=true) )
+
+# rad2deg(mean( compute_error( Ps_est_lsq, Ps_gt, norm_err;  affine=true) ))
+# mean( compute_error(Ps_est_lsq, Ps_gt, norm_err;  affine=true) )
+
+# Ps_est_lsq_alt = AffineCams_from_F_vectorized_alternate(F; irls=false, ambiguity_params=p[end-3:end]*1);
+# rad2deg(mean( compute_error( Ps_est_lsq_alt, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
+# mean( compute_error(Ps_est_lsq_alt, Ps_gt, norm_err;  affine=true) )
+
+# rad2deg(mean( compute_error( Ps_gt, Ps_est_lsq, projective_synchronization.angular_distance;  affine=true) ))
+# mean( compute_error( Ps_gt, Ps_est_lsq, norm_err;  affine=true) )
+
+
+# Ps_est_sep = AffineCams_from_F_separate(F);
+# rad2deg(mean( compute_error( Ps_gt, Ps_est_normal1, projective_synchronization.angular_distance;  affine=true) ))
+# rad2deg(mean( compute_error( Ps_est_normal1, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
+# rad2deg(mean( compute_error( Ps_gt, Ps_est_lsq, projective_synchronization.angular_distance;  affine=true) ))
+# rad2deg(mean( compute_error( Ps_est_sep, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
+
+# Ps_est_lad = AffineCams_from_F_vectorized(F; lad=true);
+# rad2deg(mean( compute_error( Ps_est_lad, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
+# rad2deg(mean( compute_error( Ps_gt, Ps_est_lad, projective_synchronization.angular_distance;  affine=true) ))
+
+# Ps_est_lsq_inner_irls = AffineCams_from_F_vectorized(F; irls=true);
+# Ps_est_sep_irls = AffineCams_from_F_separate(F; irls=true);
+# rad2deg(mean( compute_error( Ps_est_lsq_inner_irls, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
+# rad2deg(mean( compute_error( Ps_gt, Ps_est_lsq_inner_irls, projective_synchronization.angular_distance;  affine=true) ))
+# rad2deg(mean( compute_error( Ps_est_sep_irls, Ps_gt, projective_synchronization.angular_distance;  affine=true) ))
+
+# Ps_est_outer_irls, wts = lsq_irls((wts)->AffineCams_from_F_vectorized(F,wts; irls=false), F; weight_function=projective_synchronization.cauchy, c=projective_synchronization.c_cauchy,  max_it=50, δ=deg2rad(1e-3));
+# rad2deg(mean(compute_error(Ps_est_outer_irls, Ps_gt, projective_synchronization.angular_distance; affine=true)))
+# mean( compute_error(Ps_est_outer_irls, Ps_gt, norm_err;  affine=true) )
+
+# rad2deg(mean(compute_error(Ps_gt, Ps_est_outer_irls, projective_synchronization.angular_distance; affine=true)))
+
+# Ps_est_gnc, wts = gnc((wts)->AffineCams_from_F_vectorized(F,wts; irls=false), F;σ_init=10, σ_final = 0.5, γ=0.5, max_it=100, δ=deg2rad(1e-6));
+# rad2deg(mean(compute_error(Ps_est_gnc, Ps_gt, projective_synchronization.angular_distance; affine=true)))
+# rad2deg(mean(compute_error(Ps_gt, Ps_est_gnc, projective_synchronization.angular_distance; affine=true)))
+
+# rad2deg(mean(compute_error( Ps_gt,Ps_est_gnc, projective_synchronization.angular_distance; affine=true)))
+# rad2deg(mean(compute_error(Ps_gt, Ps_est_irls, projective_synchronization.angular_distance; affine=true)))
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Affine
+# test_mthds = [ "afflin", "affline_irls-outer", "afflin_irls","afflin_irls-filter", "afflin_irls-filter-set_last", "afflin_irls-filter-set_last-only_t", "afflin_irls-filter-set_last-only_t-regularize"]
+# test_mthds = [ "afflin", "afflin_irls-outer", "afflin_irls-filter"]
+# E_outliers_F = sensitivity(create_synthetic_environment, "outlier", collect(0.0:0.01:0.07), test_mthds, norm_err; split_err=false, affine=true, initialize=false, init_methods=[""], num_trials=25, holes_density=0.0, num_cams=30, noise_type="angular");
+# E_noise_F = sensitivity(create_synthetic_environment, "noise", collect(deg2rad.(0:0.5:8.0)), test_mthds, norm_err; split_err=true, affine=true, initialize=false, init_methods=[""], num_trials=50, holes_density=0.0, num_cams=30, noise_type="angular");
+
+# for i in 1:length(E_missing_init_F[6])
+    # if length(E_missing_init_F[6][i]) < 10
+        # E_missing_init_F[6][i] = Inf*ones(10)
+    # end
+# end
+
+# Errs_matrix = stack(stack(stack.(E_outliers_F_split)'));
+# Errs_matrix = stack(stack.(E_outliers_F)');
+# Errs_matrix = stack(stack(stack.(E_noise_F)')) ;
+# Errs_matrix = Errs_matrix[1,:,:,1,:,:]
+# Errs_matrix = dropdims(Errs_matrix, dims = tuple(findall(size(Errs_matrix) .== 1)...));;
+# file = MAT.matopen("Outliers_gt&cam_rand.mat", "w")
+# write(file, "E", Errs_matrix)   
+
+# write(file, "E_R", Errs_matrix[1,:,:,:])   
+# write(file, "E_t", Errs_matrix[2,:,:,:])   
+
+# close(file)

@@ -217,38 +217,8 @@ function process_data(datasets, methods=["gpsfm", "synch", "ours"])
     return BA_times, times,errs
 end
 
-function get_hist_gpsfm_data(datasets, methods=["gpsfm", "synch", "ours"]; gt_folder_path="/home/rakshith/PoliMi/Recovering Cameras/datasets/GPSFM_DATASETS/")
-    # dataset_paths = Dict( [""]  )
 
-    gt_dataset_paths = [gt_folder_path*dataset*"/data"*".mat" for dataset in datasets]    
-    folder_path = "/home/rakshith/PoliMi/Projective Synchronization/projective-synchronization-julia/GPSFM-code/DataSet Proj/"
-    dataset_paths = [folder_path*dataset*".mat" for dataset in datasets]
-    Es = Vector{Vector{Float64}}()
-    for (i,dataset_file) in enumerate(dataset_paths)
-        println(datasets[i])
-        # Get GT F
-        file = MAT.matopen(gt_dataset_paths[i])
-        vars = read(file);
-        close(file)
-        Ps_gt = vars["P"]
-        Ps_gt = Cameras{Float64}([Ps_gt[j] for j=1:size(Ps_gt,2)])
-        F_gt = SparseMatrixCSC{FundMat{Float64}, Int64}(repeat([FundMat(zeros(3,3))],length(Ps_gt),length(Ps_gt)))
-        compute_multiviewF_from_cams!(0.0, F_gt, Ps_gt, noise_type="angular"; normalize=true)    
-    
-        # Get gpsfm computed F
-        file = MAT.matopen(dataset_file)
-        vars = read(file);
-        close(file)
-        F = vars["FN"]
-        F_mv_gpsfm = wrap(F)
-        # edge_errors(F_gt, F_mv_gpsfm)
-        push!(Es,rad2deg.(edge_errors(F_gt, F_mv_gpsfm)))
-    end
-    return Es
-end
-
-
-# datasets = ["Dino 319","Dino 4983","Corridor", "House", "Gustav Vasa", "Folke Filbyter", "Park Gate", "Nijo", "Drinking Fountain", "Golden Statue", "Jonas Ahls", "De Guerre", "Dome", "Alcatraz Courtyard", "Alcatraz Water Tower", "Cherub", "Pumpkin", "Sphinx", "Toronto University", "Sri Thendayuthapani", "Porta san Donato", "Buddah Tooth", "Tsar Nikolai I", "Smolny Cathedral", "Skansen Kronan"];
+# datasets = ["Dino 319","Dino 4983",]#"Corridor", "House", "Gustav Vasa", "Folke Filbyter", "Park Gate", "Nijo", "Drinking Fountain", "Golden Statue", "Jonas Ahls", "De Guerre", "Dome", "Alcatraz Courtyard", "Alcatraz Water Tower", "Cherub", "Pumpkin", "Sphinx", "Toronto University", "Sri Thendayuthapani", "Porta san Donato", "Buddah Tooth", "Tsar Nikolai I", "Smolny Cathedral", "Skansen Kronan"];
 # Er = get_hist_gpsfm_data(datasets);
 # maximum(Er[8])
 
@@ -302,31 +272,6 @@ end
 
 
 
-### Affine
-# test_mthds = [ "afflin", "affline_irls-outer", "afflin_irls","afflin_irls-filter", "afflin_irls-filter-set_last", "afflin_irls-filter-set_last-only_t", "afflin_irls-filter-set_last-only_t-regularize"]
-# test_mthds = [ "afflin", "afflin_irls-outer", "afflin_irls-filter"]
-# E_outliers_F = sensitivity(create_synthetic_environment, "outlier", collect(0.0:0.01:0.07), test_mthds, norm_err; split_err=false, affine=true, initialize=false, init_methods=[""], num_trials=25, holes_density=0.0, num_cams=30, noise_type="angular");
-# E_noise_F = sensitivity(create_synthetic_environment, "noise", collect(deg2rad.(0:0.5:8.0)), test_mthds, norm_err; split_err=true, affine=true, initialize=false, init_methods=[""], num_trials=50, holes_density=0.0, num_cams=30, noise_type="angular");
-
-# for i in 1:length(E_missing_init_F[6])
-    # if length(E_missing_init_F[6][i]) < 10
-        # E_missing_init_F[6][i] = Inf*ones(10)
-    # end
-# end
-
-# Errs_matrix = stack(stack(stack.(E_outliers_F_split)'));
-# Errs_matrix = stack(stack.(E_outliers_F)');
-# Errs_matrix = stack(stack(stack.(E_noise_F)')) ;
-# Errs_matrix = Errs_matrix[1,:,:,1,:,:]
-# Errs_matrix = dropdims(Errs_matrix, dims = tuple(findall(size(Errs_matrix) .== 1)...));;
-# file = MAT.matopen("Outliers_gt&cam_rand.mat", "w")
-# write(file, "E", Errs_matrix)   
-
-# write(file, "E_R", Errs_matrix[1,:,:,:])   
-# write(file, "E_t", Errs_matrix[2,:,:,:])   
-
-# close(file)
-
 
 
 
@@ -356,6 +301,7 @@ end
 
 
 
+# datasets = ["Dino 319","Dino 4983","Corridor", "House", "Gustav Vasa", "Folke Filbyter", "Park Gate", "Nijo", "Drinking Fountain", "Golden Statue", "Jonas Ahls", "De Guerre", "Dome", "Alcatraz Courtyard", "Alcatraz Water Tower", "Cherub", "Pumpkin", "Sphinx", "Toronto University", "Sri Thendayuthapani", "Porta san Donato", "Buddah Tooth", "Tsar Nikolai I", "Smolny Cathedral", "Skansen Kronan"];
 # datasets = ["Dino 319","Dino 4983","Corridor", "House", "Gustav Vasa", "Folke Filbyter", "Park Gate", "Nijo", "Drinking Fountain", "Golden Statue", "Jonas Ahls", "De Guerre", "Dome", "Alcatraz Courtyard", "Alcatraz Water Tower", "Cherub", "Pumpkin", "Sphinx", "Toronto University", "Sri Thendayuthapani", "Porta san Donato", "Buddah Tooth", "Tsar Nikolai I", "Smolny Cathedral", "Skansen Kronan"];
 # gt_folder_path="/home/rakshith/PoliMi/Recovering Cameras/datasets/GPSFM_DATASETS/"
 # gt_dataset_paths = [gt_folder_path*dataset*"/data"*".mat" for dataset in datasets]    

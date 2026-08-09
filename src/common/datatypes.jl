@@ -1,9 +1,5 @@
 const Camera{T <: AbstractFloat}       = SMatrix{3,4, T}
 
-const Camera_canonical = Camera{Float64}( [ [1,0,0 ] [0,1,0] [0,0,1] [0,0,0] ] );;
-
-const AffineCamera_canonical = Camera{Float64}( [ [1,0,0] [0,1,0] [0,0,0] [0,0,1] ] );
-
 const Cameras{T <: AbstractFloat}      = Vector{Camera{T}}
 
 const Pt2D{T <: AbstractFloat}         =  SVector{2,T}
@@ -11,6 +7,9 @@ const Pt2D{T <: AbstractFloat}         =  SVector{2,T}
 const Pts2D{T <: AbstractFloat}        = Vector{Pt2D{T}}
 
 const Pt2D_homo{T <: AbstractFloat}    = SVector{3,T}
+
+Base.zero(::Type{Pts2D{T}}) where T<:AbstractFloat = Pts2D{T}[]
+Base.zero(::Pts2D{T}) where T<:AbstractFloat = zero(Pts2D{T})
 
 const Pts2D_homo{T <: AbstractFloat}   = Vector{Pt2D_homo{T}}
 
@@ -22,10 +21,13 @@ const Pt3D_homo{T <: AbstractFloat}    = SVector{4,T}
 
 const Pts3D_homo{T <: AbstractFloat}   = Vector{Pt3D_homo{T}}
 
+const Point{T<:AbstractFloat} = Union{Pt2D{T}, Pt2D_homo{T}, Pt3D{T}, Pt3D_homo{T}}
+
 const FundMat{T <: AbstractFloat}      = SMatrix{3,3,T}
 
 const FundMats{T <: AbstractFloat}     = Vector{FundMat{T}}
 
+const I₃ = SMatrix{3,3,Float64}(I)
 const I₄ = SMatrix{4,4,Float64}(I)
 
 const K₃₄ = get_commutation_matrix(3,4)
@@ -42,22 +44,16 @@ function vec_aff(P::Camera{T}) where T<:AbstractFloat
     return SVector{8,T}([vec(P[1:2,1:3]);vec(P[1:2,end])])
 end
 
-struct CameraParams{T<:AbstractFloat}
-    f₁::T
-    f₂::T
-    pp::Pt2D{T}
-    α::T
-    K::SMatrix{3,3,T};
-end 
-CameraParams(f::T, pp::Pt2D{T}, α=0.0) where T<:AbstractFloat = CameraParams{T}(f,f,pp,α, SMatrix{3,3,T}([[f,0,0];[α,f,0];[pp[1],pp[2],1]]));
-CameraParams(f₁::T, f₂::T, pp::Pt2D{T}, α=0.0) where T<:AbstractFloat = CameraParams{T}(f₁,f₂,pp,α, SMatrix{3,3,T}([[f₁,0,0];[α,f₂,0];[pp[1],pp[2],1]]));
-
 function homogenize(Pt::Pt2D{T})::Pt2D_homo{T} where T
     return Pt2D_homo{T}([Pt; 1])
 end
 
 function homogenize(Pt::Pt3D{T})::Pt3D_homo{T} where T
     return Pt3D_homo{T}([Pt;1])
+end
+
+function homogenize(Pt::AbstractVector{T}) where T
+    return vcat(Pt,one(T))
 end
 
 function euclideanize(Pt_homo::Pt2D_homo{T})::Pt2D{T} where T
@@ -67,6 +63,11 @@ end
 function euclideanize(Pt_homo::Pt3D_homo{T})::Pt3D{T} where T
     return Pt3D{T}( (Pt_homo/Pt_homo[end])[1:end-1]  )
 end
+
+function euclideanize(Pt_homo::AbstractVector{T}) where T
+    return (Pt_homo/Pt_homo[end])[1:end-1]
+end
+
 
 function wrap!(F::SparseMatrixCSC{FundMat{T}, S}, F_unwrapped::AbstractMatrix{T}) where {T<:AbstractFloat, S<:Integer}
     n = size(F,1)
@@ -106,3 +107,33 @@ function unwrap(F_multiview::SparseMatrixCSC{FundMat{T}, S}) where {T<:AbstractF
     unwrap!(F_unwrapped, F_multiview)
     return F_unwrapped
 end
+
+#Maybe add keypoint_id to this struct for identity 
+struct point_id{Pt_type<:Point}
+    point::Pt_type
+    image_id::Int
+    keypoint::Int
+end
+point_id(pt::Pt, img::Int, kp::Int) where Pt = point_id{Pt}(pt,img, kp); 
+
+struct keypoint_id{N<:Integer}
+    keypoint::N
+    image_id::N
+end
+
+struct correspondence{Pt}
+    point1::Pt
+    point2::Pt
+end
+# correspondence(pt1::Pt, pt2::Pt) where Pt = correspondence{Pt}(pt1, pt2);
+
+const point_id2D{T<:AbstractFloat} = point_id{ Pt2D{T} }
+const track2D{point_id2D} = StructArrays.StructArray{point_id2D}
+const keypoints{keypoint_id} = StructArrays.StructArray{keypoint_id}
+
+const correspondence2D{T} = correspondence{T}
+const correspondences2D{T} = StructArrays.StructArray{correspondence2D{T}}
+
+Base.zero(::Type{correspondences2D{T}}) where T = correspondences2D{T}[]
+Base.zero(::correspondences2D{T}) where T = zero(correspondences2D{T})
+Base.iszero(c::correspondences2D{T}) where T = return (length(c)>0 ? false : true);
