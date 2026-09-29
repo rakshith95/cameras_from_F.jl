@@ -299,70 +299,118 @@ function triplet_coincidence_cost(X::AbstractVector{T}, Fs::FundMats{T2}) where 
     return E
 end
 
+# function projection_consistency(track::track2D, F_mult::AbstractSparseMatrix{FundMat{T}}) where T<:AbstractFloat 
+#     num_pts = length(track)
+#     img_ids = track.image_id
+#     num_cams = length(img_ids)
+#     # Get the subgraph for the track 
+#     F_sub = F_mult[img_ids, img_ids]
 
-function triplet_coincidence_angle(X::AbstractVector{T}, Fs::FundMats{T2}) where {T, T2<:AbstractFloat}
-    # X: 2*3n vector of points: [x11, x21,...,xn1, x12, x22,....,xn2, x13,x23,...xn3] 
-    # Assume that every point in an image has a correspondence in the other 2 images 
-    # Fs: {F21, F31, F32}
+#     num_constraints = div(nnz(F_sub),2)
 
-    # Output: 2*3n vector of error residuals: [ err(x11, F21,x12), err(x11, F31,x13), err(x21, F21,x23),...,err(xn1, F21,xn2),err(xn1, F31,xn3)]
-    
-    n = div(length(X),6)
-    Fji = Fs[1];
-    Fij = Fji';
-    
-    Fki = Fs[2];
-    Fik = Fki';
-    
-    Fkj = Fs[3];
-    Fjk = Fkj';
+#     A = zeros(3*num_constraints, 3)
+#     ct=1
+#     xᵢ = zeros(T,3)
+#     xᵢ[end] = 1;
+#     xⱼ = zeros(T,3)
+#     zⱼ[end] = 1
 
-    # d = Vector{T}(undef, 3)
-    E = Vector{T}(undef, 2*3*n) 
+#     lij = zeros(T, 3)
+#     LLT = zeros(T,3,3)    
 
-    for i=1:n
-        xᵢ = view(X, (i-1)*2+1:2*i )
-        xᵢ_hom = homogenize(xᵢ)
-        
-        xⱼ = view(X,  2*n .+ ((i-1)*2+1:2*i) )
-        xⱼ_hom = homogenize(xⱼ)
-    
-        xₖ = view(X,  4*n .+ ((i-1)*2+1:2*i) )
-        xₖ_hom = homogenize(xₖ)
+#     for i=1:size(F_sub,1)-1
+#         for j=i+1:size(F_sub,2)
+#             if iszero(F_sub[i,j])
+#                 continue
+#             end
+#             xᵢ[1:2] = track.point[i]
+#             xⱼ[1:2] = track.point[j]
+#             mul!(lij, F_sub[i,j], xⱼ )
+#             mul!(LLT, lij, transpose(lij))
+#             A[(ct-1)*3+1:ct*3] = LLT/(dot(lij, lij))
+#         end
+#     end
+#     return euclideanize(get_NullSpace_svd(A))
+# end
 
-        E[(i-1)*2+1] = acos(clamp(dot( xᵢ_hom , (I₃ - (Fji'*xⱼ_hom*xⱼ_hom'*Fji)/(dot(Fji'*xⱼ_hom, Fji'*xⱼ_hom)) )*xᵢ_hom ) / (norm(xᵢ_hom)*norm((I₃ - (Fji'*xⱼ_hom*xⱼ_hom'*Fji)/(dot(Fji'*xⱼ_hom, Fji'*xⱼ_hom)) )*xᵢ_hom) ),-1,1) );
-        E[2*i] = acos( clamp(dot( xᵢ_hom , (I₃ - (Fki'*xₖ_hom*xₖ_hom'*Fki)/(dot(Fki'*xₖ_hom, Fki'*xₖ_hom)) )*xᵢ_hom ) / (norm(xᵢ_hom)*norm((I₃ - (Fki'*xₖ_hom*xₖ_hom'*Fki)/(dot(Fki'*xₖ_hom, Fki'*xₖ_hom)) )*xᵢ_hom)),-1,1) );
+function update_point_projection_average(xᵢ::Pt2D{T}, points::Pts2D{T}, Fs::FundMats{T}) where T<:AbstractFloat
+    # xᵢ^T Fij xj = 0. Let lij = Fijxj
+    #points  = x_j for each j in Ne(i)
+    # Fs = Fij for each j in Ne(i)
+    @assert length(points) == length(Fs)
+    projected_points = Pts2D{T}()
+    lᵢⱼ = zeros(T,3)
+    Pr = zeros(T,3,3)
 
-        E[2*n + (i-1)*2+1] = acos(clamp( dot( xⱼ_hom , (I₃ - (Fji*xᵢ_hom*xᵢ_hom'*Fji')/(dot(Fji*xᵢ_hom, Fji*xᵢ_hom)))*xⱼ_hom ) / (norm(xⱼ_hom)*norm((I₃ - (Fji*xᵢ_hom*xᵢ_hom'*Fji')/(dot(Fji*xᵢ_hom, Fji*xᵢ_hom)))*xⱼ_hom) ),-1,1) ) ;
-        E[2*n + 2*i] = acos(clamp( dot( xⱼ_hom , (I₃ - (Fkj'*xₖ_hom*xₖ_hom'*Fkj)/(dot(Fkj'*xₖ_hom, Fkj'*xₖ_hom)) )*xⱼ_hom ) / (norm(xⱼ_hom)*norm((I₃ - (Fkj'*xₖ_hom*xₖ_hom'*Fkj)/(dot(Fkj'*xₖ_hom, Fkj'*xₖ_hom)) )*xⱼ_hom)), -1,1) );
-
-        E[4*n + (i-1)*2+1] = acos(clamp( dot( xₖ_hom , (I₃ - (Fki*xᵢ_hom*xᵢ_hom'*Fki')/(dot(Fki*xᵢ_hom, Fki*xᵢ_hom)) )*xₖ_hom ) / (norm(xₖ_hom)*norm((I₃ - (Fki*xᵢ_hom*xᵢ_hom'*Fki')/(dot(Fki*xᵢ_hom, Fki*xᵢ_hom)) )*xₖ_hom)), -1,1) ); 
-        E[4*n + 2*i] = acos(clamp( dot( xₖ_hom , (I₃ - (Fkj*xⱼ_hom*xⱼ_hom'*Fkj')/(dot(Fkj*xⱼ_hom, Fkj*xⱼ_hom)) )*xₖ_hom ) / (norm(xₖ_hom)*norm((I₃ - (Fkj*xⱼ_hom*xⱼ_hom'*Fkj')/(dot(Fkj*xⱼ_hom, Fkj*xⱼ_hom)) )*xₖ_hom)), -1,1) );
+    for (j,point) in enumerate(points)
+        xⱼ = homogenize(point) 
+        mul!(lᵢⱼ, Fs[j], xⱼ) # lij =  Fij*xj
+        mul!(Pr, lᵢⱼ, transpose(lᵢⱼ)) # Pr = lij*lij' 
+        ldiv!( dot(lᵢⱼ, lᵢⱼ), Pr ) # Pr = (lij*lij')/(lij'*lij)
+        ldiv!(-1.0, Pr) # Pr = - (lij*lij')/(lij'*lij)
+        axpy!(1.0 , I₃ , Pr) # Pr = I3 - (lij*lij')/(lij'*lij)
+        # lᵢⱼ = Fs[j]*xⱼ
+        # L = lᵢⱼ*lᵢⱼ'
+        # d = dot(lᵢⱼ, lᵢⱼ)
+        # Pr = I₃ - L/d
+        push!(projected_points, euclideanize( Pr*homogenize(xᵢ) ))
     end
-    return E
+    xnew = mean(projected_points) # centroid
+    δ = xnew - xᵢ
+    
+    return xᵢ + δ  
 end
 
-function point_dist_cost(X::AbstractVector{T}, X₀::Vector{Tf}) where {T,Tf<:AbstractFloat}
-    nPts = div(length(X),6)
-    E = Vector{T}(undef, 6*nPts)
+function update_point_projection_dist(xᵢ::Pt2D{T}, points::Pts2D{T}, Fs::FundMats{T}) where T<:AbstractFloat 
+    @assert length(points) == length(Fs)
+    nPts = length(points)
+    lᵢⱼ = zeros(T,3)
+    Prⱼ = zeros(T,3,3)
+    D = zeros(T,3*nPts+3, 3)
+    # D = zeros(T,3*nPts, 3)
 
-    for i=1:nPts
-        xᵢ = @view X[   (i-1)*2+1   :   i*2]
-        x₀i = @view X₀[ (i-1)*2+1   :   i*2  ]
-        
-        xⱼ = @view X[2*nPts     .+ ((i-1)*2+1:i*2)]
-        x₀j = @view X₀[2*nPts   .+ ((i-1)*2+1: i*2)  ]
-
-        xₖ = @view  X[4*nPts   .+ ((i-1)*2+1 : i*2)]
-        x₀k = @view X₀[4*nPts   .+ ((i-1)*2+1 : i*2)]
-
-        E[(i-1)*2+1 : i*2] = xᵢ - x₀i
-        E[2*nPts   .+ ((i-1)*2+1: i*2)] = xⱼ - x₀j        
-        E[4*nPts   .+ ((i-1)*2+1 : i*2)] = xₖ - x₀k
+    for (j,point) in enumerate(points)
+        xⱼ = homogenize(point) 
+        mul!(lᵢⱼ, Fs[j], xⱼ) # lij =  Fij*xj
+        mul!(Prⱼ, lᵢⱼ, transpose(lᵢⱼ)) # LLt = lij*lij' 
+        ldiv!( dot(lᵢⱼ, lᵢⱼ), Prⱼ ) # Pr = (lij*lij')/(lij'*lij)
+        # push!(projected_points, euclideanize( Pr*xⱼ ) )
+        D[ (j-1)*3+1:j*3, : ] = Prⱼ
     end
-    # E = X-X₀
-    return E
+    D[end-2:end, :] = make_skew_symmetric( projective_synchronization.unit_normalize(homogenize(xᵢ)) ) # Regularizer, but not precise. Re think
+
+    xnew = euclideanize(get_NullSpace_svd(D))
+    δ = xnew - xᵢ
+    return xᵢ + δ
+    # return euclideanize(get_NullSpace_svd(D))
 end
 
+function update_points!(track::track2D, F_mult::AbstractSparseMatrix{FundMat{T}}, update_point::Function) where T<:AbstractFloat
+    points = track.point; #all 2D points
+    Fsub = F_mult[track.image_id, track.image_id]
+    # Fs = nonzeros(Fsub) # all nnz 
+    
+    for (i,track_point) in enumerate(track) 
+        # i = track_point.image_id
+        Ne_Fs = FundMats{T}()
+        if i==1 
+            Ne_points = points[2:end]
+        elseif i == length(track)
+            Ne_points = points[1:end-1]
+        else
+            Ne_points = Pts2D{T}([ points[1:i-1];points[i+1:end] ])
+        end
+
+        # i = track_point.image_id
+        for j=1:size(Fsub,1)
+            if iszero(Fsub[i,j])
+                continue
+            end
+            push!(Ne_Fs, Fsub[i,j])
+        end
+
+        track[i] = point_id2D{T}(update_point(track_point.point, Ne_points, Ne_Fs), track_point.image_id, track_point.keypoint) ;
+    end
+end
 
 # Homography averaging sort of, for mosaics 

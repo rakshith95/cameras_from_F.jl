@@ -55,9 +55,8 @@ function add_edges!(A_existing::AbstractSparseMatrix, A_wt::AbstractSparseMatrix
     return min(num_edges_new, length(candidates))
 end
 
-function mv_sampson_δ_track(track::track2D{point_id2D{T}}, F_multiview::AbstractSparseMatrix, EdgeWeights::AbstractSparseMatrix{T}; limit_constraints=Inf) where T<:AbstractFloat
+function mv_sampson_δ_track(track::track2D{point_id2D{T}}, F_multiview::AbstractSparseMatrix{FundMat{TF}}, EdgeWeights::AbstractSparseMatrix{TF}; limit_constraints=Inf) where {T,TF<:AbstractFloat}
     # Assume there is only 1 point in the track corresponding to any image.
-
     num_pts = length(track)
     img_ids = track.image_id
     num_cams = length(img_ids)
@@ -77,12 +76,9 @@ function mv_sampson_δ_track(track::track2D{point_id2D{T}}, F_multiview::Abstrac
 
     C = zeros(T, num_constraints)
     J = zeros(T, num_constraints , 2*num_pts) #Sparse?
-    # JJT = zeros(T, num_constraints, num_constraints)
-    # JJT_cpy = copy(JJT)
     δ = zeros(T, 2*num_pts)
 
     # preprocess_VG
-
     nzvals = nonzeros(F_sub)
     rvals = rowvals(F_sub)
     xᵢ = zeros(T,3)
@@ -128,10 +124,10 @@ function mv_sampson_δ_track(track::track2D{point_id2D{T}}, F_multiview::Abstrac
     end
     # δ = -pinv(J)*C # correct formula
     δ = -J\C # correct formula
-    return δ
+    return δ,C
 end
 
-function mv_sampson_δ_tracks(fs::AbstractVector{T}, fs_svd::AbstractVector{S},tracks::AbstractVector{track2D}, F_info::Tuple{AbstractSparseMatrix{FundMat{T1}}, Vector{Int}}, subgraphs::Vector{AbstractSparseMatrix{Int}}; disp=false) where {S,T,T1<:AbstractFloat}
+function mv_sampson_δ_tracks(fs::AbstractVector{T}, fs_svd::AbstractVector{S},tracks::AbstractVector{track2D}, F_info::Tuple{AbstractSparseMatrix{FundMat{T1}}, Vector{Int}}, subgraphs::Vector{AbstractSparseMatrix{Int}};) where {S,T,T1<:AbstractFloat}
     F_mv, F_rvals = F_info
     Fnz = [apply_update(fs[(i-1)*7+1:i*7], fs_svd[i]) for i in eachindex(fs_svd)]
     nconstr_prev = div(nnz(subgraphs[1]),2)
@@ -188,7 +184,6 @@ function mv_sampson_δ_tracks(fs::AbstractVector{T}, fs_svd::AbstractVector{S},t
                 constraint_ct += 1
             end
         end
-
         # append!(δ,-J\C)) # correct formula
         append!(δ,transpose(J)*(cholesky!(J*J')\C)) # minus can be ignored
         # append!(δ,-pinv(J)*C) # correct formula
@@ -197,7 +192,13 @@ function mv_sampson_δ_tracks(fs::AbstractVector{T}, fs_svd::AbstractVector{S},t
 end
 
 # Need to speed up 
-function refineF_trackwise!(F_mult::AbstractSparseMatrix{FundMat{T}}, keypoints::Vector{Pts2D{T}}, CorresMat::AbstractSparseMatrix{correspondences2D{keypoint_id}}, ConstraintGraph::AbstractSparseMatrix{T}) where T<:AbstractFloat
+function refineF_trackwise!(F_mult::AbstractSparseMatrix{FundMat{T}}, keypoints::Vector{Pts2D{T}}, CorresMat::AbstractSparseMatrix{correspondences2D{keypoint_id}}, ConstraintGraph::AbstractSparseMatrix{T}; max_its=500, disp=false) where T<:AbstractFloat
+    tracks = correspondences_to_tracks(keypoints, CorresMat, F_mult; min_track_length=3);
+    refineF_trackwise!(F_mult, tracks, ConstraintGraph; max_its=max_its, disp=disp)    
+end
+
+
+function refineF_trackwise!(F_mult::AbstractSparseMatrix{FundMat{T}}, tracks::AbstractVector{track2D}, ConstraintGraph::AbstractSparseMatrix{T}; max_its=500, disp=false) where T<:AbstractFloat
     F_nz = nonzeros(triu!(F_mult,1)); #### scale to make svdvals[1] = 1
     F_nz_svd = [ svd(F/svdvals(F)[1]) for F in F_nz  ]
     fvecs_init = zeros(T, length(F_nz_svd)*7);
@@ -210,21 +211,19 @@ function refineF_trackwise!(F_mult::AbstractSparseMatrix{FundMat{T}}, keypoints:
             A_curr[i,j] = 1
         end
     end
-    tracks = correspondences_to_tracks(keypoints, CorresMat, F_mult);
     WeightsGraph = 1 ./ ConstraintGraph;
     filtered_subGraphs = Vector{AbstractSparseMatrix{Int}}(undef, length(tracks))
-    
     for (i,track) in enumerate(tracks)
-        subG_wts = WeightsGraph[track.image_id, track.image_id];
-        filt = preprocess_VG(subG_wts,1);
-        filtered_subGraphs[i] = filt; 
-        num_remaining = (2*length(track) - 3) - div(nnz(filtered_subGraphs[i]),2)
-        n_added = add_edges!(filtered_subGraphs[i], subG_wts, num_remaining)
-        filtered_subGraphs[i] = dropzeros!(filtered_subGraphs[i])
-        # filtered_subGraphs[i] = A_curr[track.image_id, track.image_id] 
-        # filtered_subGraphs[i] += filtered_subGraphs[i]' 
+        # subG_wts = WeightsGraph[track.image_id, track.image_id];
+        # filt = preprocess_VG(subG_wts,1);
+        # filtered_subGraphs[i] = filt; 
+        # num_remaining = (2*length(track) - 3) - div(nnz(filtered_subGraphs[i]),2)
+        # n_added = add_edges!(filtered_subGraphs[i], subG_wts, num_remaining)
+        # filtered_subGraphs[i] = dropzeros!(filtered_subGraphs[i])
+        filtered_subGraphs[i] = A_curr[track.image_id, track.image_id] 
+        filtered_subGraphs[i] += filtered_subGraphs[i]' 
     end
-    opt = LeastSquaresOptim.optimize(x->mv_sampson_δ_tracks( x, F_nz_svd, tracks, (F_mult, F_rvals), filtered_subGraphs), fvecs_init, LeastSquaresOptim.LevenbergMarquardt(), iterations=100, autodiff=:forward)
+    opt = LeastSquaresOptim.optimize(x->mv_sampson_δ_tracks( x, F_nz_svd, tracks, (F_mult, F_rvals), filtered_subGraphs), fvecs_init, LeastSquaresOptim.LevenbergMarquardt(), iterations=max_its, autodiff=:forward)
 
     # f(x) = mv_sampson_δ_tracks(x, F_nz_svd, tracks, (F_mult, F_rvals), filtered_subGraphs)
 
@@ -243,8 +242,9 @@ function refineF_trackwise!(F_mult::AbstractSparseMatrix{FundMat{T}}, keypoints:
     #                                               y = y0, g! = g!)
     # opt = LeastSquaresOptim.optimize!(prob, LeastSquaresOptim.LevenbergMarquardt(); show_trace = true, iterations=20)
 
-
-    println(opt.converged," ", opt.iterations," ", opt.ssr)
+    if disp 
+        println(opt.converged," ", opt.iterations," ", opt.ssr)
+    end
 
     for j=1:size(A_curr,2)
         A_col_nz = nzrange(A_curr,j)

@@ -39,6 +39,27 @@ function two_view_sampson_err(f::AbstractVector{T}, F₀_svd::StaticArrays.SVD{S
     end
     return δ
 end
+
+function two_view_sampson_err(F::SMatrix{3,3,T}, pts1::Pts2D{T2}, pts2::Pts2D{T2}) where {T, T2<:AbstractFloat} 
+    e = Vector{T}()
+    xᵢ = Vector{T2}([0,0,1]);
+    xⱼ = Vector{T2}([0,0,1]);
+    J = zeros(T,4)
+
+    @assert length(pts1) == length(pts2)
+    for i in eachindex(pts1)
+        xᵢ[1:2] = pts1[i];
+        xⱼ[1:2]  = pts2[i]
+        J[1] = dot(xⱼ, F[:,1])
+        J[2] = dot(xⱼ, F[:,2])
+        J[3] = dot(xᵢ, transpose(F)[:,1])
+        J[4] = dot(xᵢ, transpose(F)[:,2])
+        C = xⱼ'*F*xᵢ
+        append!(e, -(C/dot(J,J))*J )
+    end
+    return e
+end
+
 function refineF_pairwise!(F_mult::AbstractSparseMatrix{FundMat{T}}, keypoints::Vector{Pts2D{T}}, CorresMat::AbstractSparseMatrix{ correspondences2D{keypoint_id}}; max_its=1000 ) where {T<:AbstractFloat}
     nCams = size(F_mult,1);
     fUpdate_init = zeros(T, 7);

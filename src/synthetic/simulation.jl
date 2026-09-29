@@ -87,6 +87,11 @@ function noise_cameras( σ::T, Ps::Cameras{T}) where T<:AbstractFloat
     return Cameras{T}([ Camera{T}(reshape(projective_synchronization.rotate_vector(vec(Ps[i]), θ) , 3, 4)) for i=1:length(Ps) ])
 end
 
+function get_camera_center(P::Camera{T}) where T<:AbstractFloat
+    return get_NullSpace_svd(P)
+end
+
+
 function noise_F_from_points(σ, P₁::Camera{T}, P₂::Camera{T}, resolution=(1280,720); normalize=false) where T<:AbstractFloat
     # Think about how best  to do this
     X = Pts3D{Float64}([rand(3),rand(3),rand(3),rand(3),rand(3),rand(3),rand(3),rand(3)])

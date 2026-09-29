@@ -2,7 +2,7 @@
 
 julia_version = "1.12.5"
 manifest_format = "2.0"
-project_hash = "6f3b6e6669ff2c5dc0c7324b939a4f9c83a7a72f"
+project_hash = "0d23ef5dfba696a1d6cd554b32faba369f4e6fa9"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "bbc22a9a08a0ef6460041086d8a7b27940ed4ffd"
@@ -1261,6 +1261,11 @@ git-tree-sha1 = "645bed98cd47f72f67316fd42fc47dee771aefcd"
 uuid = "1d0040c9-8b98-4ee7-8388-3f51789ca0ad"
 version = "0.2.2"
 
+[[deps.PolynomialRoots]]
+git-tree-sha1 = "b23a239f8a930b819f877af45fd5372fc6fa65ea"
+uuid = "3a141323-8675-5d76-9d11-e1df1406c778"
+version = "1.1.0"
+
 [[deps.PooledArrays]]
 deps = ["DataAPI", "Future"]
 git-tree-sha1 = "36d8b4b899628fb92c2749eb488d884a926614d3"
@@ -1911,7 +1916,7 @@ uuid = "b2a88e68-78e7-5e94-8c20-c02986ec140e"
 version = "0.2.10+0"
 
 [[deps.cameras_from_F]]
-deps = ["Arpack", "Bijections", "Clp", "Combinatorics", "Convex", "Distributions", "FastRunningMedian", "ForwardDiff", "GraphPlot", "Graphs", "HiGHS", "LeastSquaresOptim", "LinearAlgebra", "MAT", "MATLAB", "NLLSsolver", "NonlinearSolve", "ProgressBars", "Random", "ReverseDiff", "Revise", "RowEchelon", "SCS", "SimpleWeightedGraphs", "SparseArrays", "Static", "StaticArrays", "Statistics", "StatsBase", "StructArrays", "TiledIteration", "projective_synchronization"]
+deps = ["Arpack", "Bijections", "Clp", "Combinatorics", "Convex", "Distributions", "FastRunningMedian", "ForwardDiff", "GraphPlot", "Graphs", "HiGHS", "LeastSquaresOptim", "LinearAlgebra", "MAT", "MATLAB", "NLLSsolver", "NonlinearSolve", "PolynomialRoots", "ProgressBars", "Random", "ReverseDiff", "Revise", "RowEchelon", "SCS", "SimpleWeightedGraphs", "SparseArrays", "Static", "StaticArrays", "Statistics", "StatsBase", "StructArrays", "TiledIteration", "projective_synchronization"]
 path = "."
 uuid = "7d5186e3-19b5-4a9a-9bc5-2bd5fd452709"
 version = "0.1.0"
